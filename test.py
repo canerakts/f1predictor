@@ -1508,53 +1508,26 @@ class F1RacePredictor:
             avg_race_conf = race_predictions['Advanced_Confidence'].mean()
             print(f"   Average Race Confidence (Advanced): {avg_race_conf:.1f}%")
         
-        # Tire Strategy Analysis
-        print(f"\n🏎️ Tire Strategy Analysis:")
-        print("-" * 60)
-        try:
-            tire_analysis = self.analyze_tire_strategy_impact(race_runs, gp_name)
-            
-            if tire_analysis['compound_pace_difference']:
-                print("Tire Compound Performance:")
-                for compounds, pace_diff in tire_analysis['compound_pace_difference'].items():
-                    print(f"   {compounds}: {pace_diff:+.3f}s difference")
-            
-            if tire_analysis['optimal_strategy']:
-                print(f"Optimal Strategy: {tire_analysis['optimal_strategy']}")
-                print(f"Strategy Flexibility: {tire_analysis['strategy_flexibility']:.1f}/10")
-            else:
-                print("   Insufficient tire data for strategy analysis")
-                
-        except Exception as e:
-            print(f"   ⚠️ Tire analysis error: {e}")
-
-        # Generate betting insights
-        self.generate_betting_insights(predictions, gp_name)
-          # Run enhanced Monte Carlo simulation with dynamic blurriness
-        print(f"\n🎲 ENHANCED MONTE CARLO SIMULATION")
+        # Run Monte Carlo simulation
+        print("\n🎲 MONTE CARLO SIMULATION")
         print("-" * 80)
-        
         try:
             simulation_results = self.simulate_race_with_dynamic_blurriness(
-                race_predictions, features, model_performance, data_quality, 
-                track_category, num_simulations=1000
+                race_predictions,
+                features,
+                model_performance,
+                data_quality,
+                track_category,
+                num_simulations=1000,
             )
-            
             if not simulation_results.empty:
-                # Display simulation results with uncertainty
-                self.display_simulation_with_uncertainty(simulation_results, track_category)
-                
-                # Add simulation results to predictions
-                predictions['monte_carlo'] = simulation_results
+                predictions["monte_carlo"] = simulation_results
             else:
                 print("❌ Monte Carlo simulation failed to generate results")
-                
         except Exception as e:
             print(f"❌ Monte Carlo simulation error: {e}")
             print("   Continuing without simulation analysis...")
 
-        # Export predictions
-        self.export_predictions(predictions, gp_name)
         
         return predictions
 
@@ -1922,106 +1895,6 @@ class F1RacePredictor:
         except:
             return {'weather_penalty': 0.0, 'rainfall_effect': 0.0, 'wind_effect': 0.0}
 
-    def analyze_tire_strategy_impact(self, race_runs, gp_name):
-        """Analyze tire strategy and degradation patterns"""
-        tire_analysis = {
-            'compound_pace_difference': {},
-            'degradation_rates': {},
-            'optimal_strategy': None,
-            'strategy_flexibility': 0.0
-        }
-        
-        if race_runs.empty:
-            return tire_analysis
-        
-        # Track-specific tire factors
-        track_tire_factors = {
-            'Monaco': {'degradation_factor': 0.7, 'compound_difference': 0.3},
-            'Hungary': {'degradation_factor': 0.8, 'compound_difference': 0.4},
-            'Spain': {'degradation_factor': 1.2, 'compound_difference': 0.8},
-            'Canada': {'degradation_factor': 1.0, 'compound_difference': 0.6},
-            'Austria': {'degradation_factor': 1.3, 'compound_difference': 0.9},
-            'Bahrain': {'degradation_factor': 1.4, 'compound_difference': 1.0}
-        }
-        
-        track_factor = track_tire_factors.get(gp_name, {'degradation_factor': 1.0, 'compound_difference': 0.6})
-        tire_analysis['optimal_strategy'] = 'Medium-Hard'
-        tire_analysis['strategy_flexibility'] = 7.5
-        
-        return tire_analysis
-
-    def generate_betting_insights(self, predictions, gp_name):
-        """Generate betting insights based on predictions"""
-        if not predictions or 'qualifying' not in predictions or 'race' not in predictions:
-            return
-        
-        print(f"\n💰 BETTING INSIGHTS - {gp_name} GP")
-        print("-" * 60)
-        
-        quali_preds = predictions['qualifying']
-        race_preds = predictions['race']
-        
-        # Pole position value bets
-        pole_candidates = quali_preds[quali_preds['Pole_Probability'] > 15].head(3)
-        if not pole_candidates.empty:
-            print("🏆 Pole Position Value Bets:")
-            for _, row in pole_candidates.iterrows():
-                confidence_level = "High" if row['Confidence'] > 70 else "Medium"
-                print(f"   {row['Driver']}: {row['Pole_Probability']:.0f}% chance ({confidence_level} confidence)")
-        
-        # Race winner candidates
-        race_winners = race_preds[race_preds['Predicted_Finish'] <= 3]
-        if not race_winners.empty:
-            print("\n🏁 Race Winner Candidates:")
-            for _, row in race_winners.iterrows():
-                grid_pos = row['Grid_Position']
-                change = row['Positions_Change']
-                if change > 0:
-                    print(f"   {row['Driver']}: P{grid_pos} → P{row['Predicted_Finish']} "
-                          f"({change:+d} positions, {row['Points_Probability']:.0f}% points chance)")
-          # Dark horses (big position gains)
-        dark_horses = race_preds[race_preds['Positions_Change'] >= 3].head(3)
-        if not dark_horses.empty:
-            print("\n🌟 Dark Horse Candidates:")
-            for _, row in dark_horses.iterrows():
-                print(f"   {row['Driver']}: P{row['Grid_Position']} → P{row['Predicted_Finish']} "
-                      f"({row['Positions_Change']:+d} positions)")
-
-    def export_predictions(self, predictions, gp_name):
-        """Export predictions to CSV files including Monte Carlo results"""
-        if not predictions:
-            return
-        
-        # Export qualifying predictions
-        if 'qualifying' in predictions:
-            quali_file = f"{gp_name}_{self.year}_qualifying_predictions.csv"
-            predictions['qualifying'].to_csv(quali_file, index=False)
-            print(f"\n📄 Qualifying predictions exported to: {quali_file}")
-        
-        # Export race predictions
-        if 'race' in predictions:
-            race_file = f"{gp_name}_{self.year}_race_predictions.csv"
-            predictions['race'].to_csv(race_file, index=False)
-            print(f"📄 Race predictions exported to: {race_file}")
-        
-        # Export Monte Carlo simulation results
-        if 'monte_carlo' in predictions:
-            mc_file = f"{gp_name}_{self.year}_monte_carlo_simulation.csv"
-            predictions['monte_carlo'].to_csv(mc_file, index=False)
-            print(f"📄 Monte Carlo simulation exported to: {mc_file}")
-        
-        # Export enhanced summary with uncertainty metrics
-        summary_file = f"{gp_name}_{self.year}_summary.csv"
-        summary_data = {
-            'GP': [gp_name],
-            'Year': [self.year],
-            'Track_Category': [predictions.get('track_category', 'unknown')],
-            'Predictions_Generated': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
-            'Monte_Carlo_Included': ['monte_carlo' in predictions],
-            'Uncertainty_Analysis': [True]
-        }
-        pd.DataFrame(summary_data).to_csv(summary_file, index=False)
-        print(f"📄 Enhanced summary exported to: {summary_file}")
 
     def calculate_advanced_confidence(self, predictions, model_performance, data_quality):
         """Calculate sophisticated confidence scores based on multiple factors"""
@@ -2323,56 +2196,6 @@ class F1RacePredictor:
         
         return pd.DataFrame(summary_data).sort_values('Avg_Position')
 
-    def display_simulation_with_uncertainty(self, simulation_results, track_category):
-        """
-        Display simulation results with uncertainty visualization
-        """
-        if simulation_results.empty:
-            return
-        
-        print(f"\n🎲 MONTE CARLO SIMULATION RESULTS")
-        print("=" * 80)
-        print(f"Track Category: {track_category.replace('_', ' ').title()}")
-        print(f"Simulations: 1000 scenarios with dynamic uncertainty")
-        
-        print(f"\n{'Driver':<12} {'Avg':<6} {'±':<5} {'Best':<6} {'Worst':<7} {'DNF%':<6} {'CI Range':<12} {'Uncertainty':<12}")
-        print("-" * 80)
-        
-        for idx, row in simulation_results.head(15).iterrows():
-            uncertainty_desc = self._get_uncertainty_description(row['Uncertainty_Level'])
-            ci_range = f"{row['Position_CI_Lower']:.1f}-{row['Position_CI_Upper']:.1f}"
-            
-            print(f"{row['Driver']:<12} {row['Avg_Position']:<6.1f} {row['Std_Dev']:<5.1f} "
-                  f"{int(row['Best_Result']):<6} {int(row['Worst_Result']):<7} "
-                  f"{row['DNF_Rate']:<6.1f} {ci_range:<12} {uncertainty_desc:<12}")
-        
-        # Probability insights
-        print(f"\n🏆 WIN PROBABILITIES (Top 5):")
-        print("-" * 40)
-        win_probs = simulation_results.nlargest(5, 'Win_Prob')
-        for idx, row in win_probs.iterrows():
-            uncertainty_desc = self._get_uncertainty_description(row['Uncertainty_Level'])
-            print(f"   {row['Driver']}: {row['Win_Prob']:.1f}% ({uncertainty_desc} confidence)")
-        
-        print(f"\n🥉 PODIUM PROBABILITIES (Top 8):")
-        print("-" * 40)
-        podium_probs = simulation_results.nlargest(8, 'Podium_Prob')
-        for idx, row in podium_probs.iterrows():
-            print(f"   {row['Driver']}: {row['Podium_Prob']:.1f}%")
-
-    def _get_uncertainty_description(self, uncertainty_level):
-        """Convert uncertainty level to human readable description"""
-        if uncertainty_level < 0.8:
-            return "Very High"
-        elif uncertainty_level < 1.2:  
-            return "High"
-        elif uncertainty_level < 1.8:
-            return "Medium"
-        elif uncertainty_level < 2.5:
-            return "Low"
-        else:
-            return "Very Low"
-
     # ...existing code...
 def main():
     """
@@ -2462,85 +2285,9 @@ def main():
         print("=" * 50)
 
 
-def demo_mode():
-    """
-    Demonstration mode showing the predictor's capabilities
-    """
-    print("🎮 DEMO MODE - F1 Race Predictor")
-    print("=" * 50)
-    
-    # Initialize predictor
-    predictor = F1RacePredictor(year=2025)
-    
-    # Demo with a specific race
-    demo_races = ['Canadian', 'Monaco', 'Spanish']
-    
-    print("🔍 Demo: Analyzing recent Grand Prix races...")
-    
-    for race in demo_races:
-        print(f"\n📊 Analyzing {race} Grand Prix...")
-        try:
-            # Quick analysis
-            predictions = predictor.generate_full_report_v2(race)
-            if predictions:
-                print(f"✅ {race} GP analysis completed")
-            else:
-                print(f"⚠️  {race} GP: Limited data available")
-        except Exception as e:
-            print(f"❌ {race} GP analysis failed: {str(e)[:50]}...")
-    
-    print("\n🎯 Demo completed! Check the generated files for results.")
+
 
 
 if __name__ == "__main__":
-    """
-    Entry point for the F1 Race Predictor script
-    """
-    import sys
-    
-    print("🏎️  F1 RACE PREDICTOR v2.0")
-    print("=" * 60)
-    print("Enhanced Monte Carlo Simulation with Dynamic Blurriness")
-    print("=" * 60)
-    
-    # Check command line arguments for modes
-    if len(sys.argv) > 1:
-        mode = sys.argv[1].lower()
-        
-        if mode == 'demo':
-            print("🎮 Running in Demo Mode...")
-            demo_mode()
-        elif mode == 'test':
-            print("🧪 Running in Test Mode...")
-            # Quick test with Canadian GP
-            try:
-                predictor = F1RacePredictor(2025)
-                predictions = predictor.generate_full_report_v2('Canadian')
-                if predictions and 'monte_carlo' in predictions:
-                    print("✅ Enhanced Monte Carlo system working correctly!")
-                    mc_results = predictions['monte_carlo']
-                    print(f"📊 Simulated {len(mc_results)} drivers with dynamic uncertainty")
-                else:
-                    print("⚠️ Monte Carlo results not found in predictions")
-            except Exception as e:
-                print(f"❌ Test failed: {e}")
-        elif mode in ['canadian', 'monaco', 'spanish', 'bahrain', 'austria']:
-            # Quick prediction for specific GP
-            try:
-                predictor = F1RacePredictor(2025)
-                gp_name = mode.title()
-                print(f"🏁 Running {gp_name} Grand Prix prediction...")
-                predictions = predictor.generate_full_report_v2(gp_name)
-                if predictions:
-                    print(f"✅ {gp_name} GP predictions completed!")
-                else:
-                    print(f"❌ Failed to generate {gp_name} GP predictions")
-            except Exception as e:
-                print(f"❌ Error: {e}")
-        else:
-            print(f"❌ Unknown mode: {mode}")
-            print("Available modes: demo, test, canadian, monaco, spanish")
-    else:
-        # Default: Run interactive main function
-        print("🚀 Starting Interactive Mode...")
-        main()
+    main()
+

@@ -1559,23 +1559,22 @@ class F1RacePredictor:
         return predictions
 
     def get_track_overtaking_factor(self, gp_name):
-        """Get overtaking factor and category for a track"""
-        for category, tracks in self.track_categories.items():
-            if gp_name in tracks:
-                # Calculate overtaking factor based on category
-                if category == 'very_low':
-                    factor = 0.2
-                elif category == 'low':
-                    factor = 0.4
-                elif category == 'medium':
-                    factor = 0.6
-                elif category == 'high':
-                    factor = 0.8
-                else:  # very_high
-                    factor = 1.0
-                return factor, category
-          # Default for unknown tracks
-        return 0.6, 'medium'
+        """Return a continuous overtaking factor and track category."""
+        overtakes = self.track_overtakes.get(gp_name, 40)
+        factor = overtakes / max(self.track_overtakes.values())
+
+        if factor < 0.35:
+            category = 'very_low'
+        elif factor < 0.45:
+            category = 'low'
+        elif factor < 0.65:
+            category = 'medium'
+        elif factor < 0.85:
+            category = 'high'
+        else:
+            category = 'very_high'
+
+        return factor, category
     
     def _create_synthetic_targets(self, features, data_quality=None):
         """Create synthetic training targets for ML models with quality-adjusted noise"""
@@ -1617,7 +1616,7 @@ class F1RacePredictor:
         overtaking_factor, track_category = self.get_track_overtaking_factor(gp_name)
         
         # Dynamic weight calculation based on track characteristics
-        weights = self._calculate_dynamic_weights(track_category)
+        weights = self._calculate_dynamic_weights(track_category, overtaking_factor)
           # Enhanced ML features for race prediction - better pace consideration
         race_ml_features = [
             'quali_position', 'race_pace', 'hist_avg_finish', 'hist_consistency',
@@ -1830,8 +1829,12 @@ class F1RacePredictor:
         
         return positions
 
-    def _calculate_dynamic_weights(self, track_category):
-        """Calculate dynamic weights based on track characteristics - more realistic balance"""
+    def _calculate_dynamic_weights(self, track_category, overtaking_factor=None):
+        """Calculate dynamic weights based on track characteristics.
+
+        The optional ``overtaking_factor`` allows fine tuning of the grid
+        importance depending on how easy overtaking is on a given track.
+        """
         weight_configs = {
             'very_low': {  # Monaco, Hungary, Singapore - grid position very important
                 'grid_importance': 0.80,
@@ -1859,8 +1862,15 @@ class F1RacePredictor:
                 'form': 0.30
             }
         }
-        
-        return weight_configs.get(track_category, weight_configs['medium'])
+
+        weights = weight_configs.get(track_category, weight_configs['medium']).copy()
+
+        # Adjust grid importance with continuous overtaking factor
+        if overtaking_factor is not None:
+            adj = 1 - 0.5 * overtaking_factor
+            weights['grid_importance'] = float(np.clip(weights['grid_importance'] * adj, 0.2, 0.8))
+
+        return weights
     
     def validate_ml_models(self, X, y, models, cv_folds=3):
         """Validate ML models using cross-validation and return performance metrics"""

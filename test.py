@@ -380,9 +380,103 @@ class F1RacePredictor:
         first_half_avg = times[:mid_point].mean()
         second_half_avg = times[mid_point:].mean()
         
+
         improvement = (first_half_avg - second_half_avg) / first_half_avg
         return improvement
-    
+
+    # ------------------------------------------------------------------
+    # Placeholder implementations for advanced analysis helpers
+    # These simplified versions allow the test suite to run without the
+    # full enhanced analysis modules present.
+    # ------------------------------------------------------------------
+
+    def _classify_stint_detailed(self, stint_laps):
+        """Heuristic stint classification for improved accuracy."""
+        if stint_laps.empty or 'LapTime' not in stint_laps.columns:
+            return {
+                'is_race_run': False,
+                'fuel_load': 'MEDIUM',
+            }
+
+        lap_times = stint_laps['LapTime'].dt.total_seconds()
+        avg_lap = lap_times.mean()
+        median_lap = lap_times.median()
+        stint_len = len(stint_laps)
+
+        # Race runs are typically longer and slower than the session median
+        is_race = stint_len >= 8 or avg_lap > median_lap * 1.03
+
+        if stint_len >= 10:
+            fuel = 'HIGH'
+        elif stint_len >= 6:
+            fuel = 'MEDIUM_HIGH'
+        elif stint_len >= 3:
+            fuel = 'MEDIUM'
+        else:
+            fuel = 'LOW'
+
+        return {'is_race_run': is_race, 'fuel_load': fuel}
+
+    def enhanced_run_analysis(self, laps):
+        """Lightweight run analysis using simple heuristics."""
+        if laps.empty:
+            return {'qualifying_runs': [], 'race_runs': []}
+
+        laps = laps.sort_values(['Driver', 'LapNumber'])
+        results = {'qualifying_runs': [], 'race_runs': []}
+
+        for driver in laps['Driver'].unique():
+            driver_laps = laps[laps['Driver'] == driver]
+            for stint in driver_laps['Stint'].dropna().unique():
+                stint_laps = driver_laps[driver_laps['Stint'] == stint]
+                if stint_laps.empty:
+                    continue
+                cls = self._classify_stint_detailed(stint_laps)
+                if cls['is_race_run']:
+                    results['race_runs'].append({
+                        'Driver': driver,
+                        'LapTime': stint_laps['LapTime'].dt.total_seconds().mean(),
+                        'LapNumber': len(stint_laps),
+                        'Compound': stint_laps['Compound'].iloc[0] if 'Compound' in stint_laps.columns else 'UNKNOWN'
+                    })
+                else:
+                    results['qualifying_runs'].append({
+                        'Driver': driver,
+                        'LapTime': stint_laps['LapTime'].dt.total_seconds().min(),
+                        'LapNumber': len(stint_laps)
+                    })
+
+        return results
+
+    def _convert_enhanced_to_standard_format(self, runs, run_type):
+        """Convert run dictionaries into a standard DataFrame."""
+        if not runs:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(runs)
+        df['RunType'] = run_type
+        return df
+
+    def validate_run_separation_quality(self, quali_df, race_df):
+        """Provide basic metrics about separated runs."""
+        return {
+            'num_quali_runs': len(quali_df),
+            'num_race_runs': len(race_df),
+            'avg_quali_laps': quali_df['LapNumber'].mean() if not quali_df.empty else 0,
+            'avg_race_laps': race_df['LapNumber'].mean() if not race_df.empty else 0,
+        }
+
+    def print_run_separation_report(self, report):
+        """Print validation information."""
+        print(
+            f"\nRun separation: {report['num_quali_runs']} quali runs, "
+            f"{report['num_race_runs']} race runs"
+        )
+        print(
+            f"Avg quali laps: {report.get('avg_quali_laps', 0):.1f} | "
+            f"Avg race laps: {report.get('avg_race_laps', 0):.1f}"
+        )
+
     def extract_weekend_features(self, gp_name):
         """Extract features from all practice sessions using enhanced run separation"""
         all_quali_runs = []

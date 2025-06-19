@@ -808,93 +808,6 @@ class F1RacePredictor:
             'overtaking_factor': overtaking_factor
         }
     
-    def generate_betting_insights(self, predictions, gp_name):
-        """Generate specific betting/fantasy insights based on predictions"""
-        if not predictions or 'race' not in predictions:
-            return
-        
-        print("\n💰 BETTING & FANTASY INSIGHTS")
-        print("-" * 80)
-        
-        quali_pred = predictions['qualifying']
-        race_pred = predictions['race']
-        overtaking_factor = predictions['overtaking_factor']
-        
-        # Podium predictions
-        print("\n🏆 Podium Probabilities:")
-        podium_candidates = race_pred[race_pred['Predicted_Finish'] <= 6].copy()
-        for _, driver in podium_candidates.iterrows():
-            podium_prob = max(0, 100 - (driver['Predicted_Finish'] - 1) * 20 - driver['DNF_Risk'])
-            print(f"   {driver['Driver']}: {podium_prob:.1f}% chance")
-        
-        # Value picks for points
-        print("\n💎 Value Picks (Outside favorites with high points probability):")
-        value_picks = race_pred[
-            (race_pred['Predicted_Finish'] > 6) & 
-            (race_pred['Points_Probability'] > 60)
-        ]
-        for _, driver in value_picks.iterrows():
-            print(f"   {driver['Driver']}: P{driver['Predicted_Finish']} "
-                  f"({driver['Points_Probability']:.1f}% points probability)")
-        
-        # Head-to-head matchups
-        print("\n⚔️  Key Head-to-Head Battles:")
-        teammates = [
-            ('VER', 'PER'), ('HAM', 'RUS'), ('LEC', 'SAI'), 
-            ('NOR', 'PIA'), ('ALO', 'STR'), ('OCO', 'GAS'),
-            ('BOT', 'ZHO'), ('ALB', 'SAR'), ('MAG', 'HUL'),
-            ('TSU', 'LAW')
-        ]
-        
-        for driver1, driver2 in teammates:
-            if driver1 in race_pred['Driver'].values and driver2 in race_pred['Driver'].values:
-                pos1 = race_pred[race_pred['Driver'] == driver1]['Predicted_Finish'].iloc[0]
-                pos2 = race_pred[race_pred['Driver'] == driver2]['Predicted_Finish'].iloc[0]
-                if abs(pos1 - pos2) <= 2:
-                    print(f"   {driver1} (P{pos1}) vs {driver2} (P{pos2}) - Close battle expected")
-        
-        # Track-specific recommendations
-        if overtaking_factor < 0.3:
-            print("\n📌 Low Overtaking Track Strategy:")
-            print("   • Bet on qualifying specialists")
-            print("   • Avoid betting on comeback drives")
-            print("   • Safety car could shuffle order significantly")
-        else:
-            print("\n📌 High Overtaking Track Strategy:")
-            print("   • Look for fast cars starting out of position")
-            print("   • Consider 'most overtakes' bets")
-            print("   • Points finishes more unpredictable")
-
-    def export_predictions(self, predictions, gp_name):
-        """Export all predictions to CSV files"""
-        if not predictions:
-            return
-        
-        # Export qualifying predictions
-        if 'qualifying' in predictions:
-            quali_file = f'{gp_name}_{self.year}_qualifying_predictions.csv'
-            predictions['qualifying'].to_csv(quali_file, index=False)
-            print(f"\n✅ Qualifying predictions saved to {quali_file}")
-        
-        # Export race predictions
-        if 'race' in predictions:
-            race_file = f'{gp_name}_{self.year}_race_predictions.csv'
-            predictions['race'].to_csv(race_file, index=False)
-            print(f"✅ Race predictions saved to {race_file}")
-        
-        # Export combined summary
-        if 'qualifying' in predictions and 'race' in predictions:
-            summary = predictions['qualifying'][['Driver', 'Predicted_Position']].merge(
-                predictions['race'][['Driver', 'Predicted_Finish', 'Positions_Change', 
-                                   'Points_Probability', 'Expected_Overtakes']],
-                on='Driver'
-            )
-            summary.columns = ['Driver', 'Quali_Pred', 'Race_Pred', 'Positions_Change', 
-                             'Points_Prob', 'Expected_Overtakes']
-            
-            summary_file = f'{gp_name}_{self.year}_summary.csv'
-            summary.to_csv(summary_file, index=False)
-            print(f"✅ Summary saved to {summary_file}")
 
 # Main execution
 if __name__ == "__main__":
@@ -927,12 +840,6 @@ if __name__ == "__main__":
         predictions = predictor.generate_full_report(gp_name)
         
         if predictions:
-            # Generate betting insights
-            predictor.generate_betting_insights(predictions, gp_name)
-            
-            # Export all predictions
-            predictor.export_predictions(predictions, gp_name)
-            
             # Additional analysis for specific track types
             if predictions['track_category'] == 'very_low':
                 print(f"\n🏁 {gp_name} Special Notes:")

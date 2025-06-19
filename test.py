@@ -1159,22 +1159,34 @@ class F1RacePredictor:
         }
         synthetic_y = self._create_synthetic_targets(ml_features, data_quality_info)
         
-        # Train models
+        # Train models using cross-validation to derive dynamic weights
         ensemble_predictions = []
-        model_weights = {'rf': 0.35, 'gbm': 0.35, 'xgb': 0.30}
-        
+        model_weights = {}
+
         for model_name, model in models.items():
             try:
+                # Evaluate model with simple cross-validation
+                cv_scores = cross_val_score(
+                    model, X, synthetic_y, cv=3, scoring="neg_mean_absolute_error"
+                )
+                mae = -cv_scores.mean()
+
+                # Fit on full data
                 model.fit(X, synthetic_y)
                 pred = model.predict(X)
-                ensemble_predictions.append(pred * model_weights[model_name])
+
+                weight = 1.0 / max(mae, 1e-3)
+                model_weights[model_name] = weight
+                ensemble_predictions.append(pred * weight)
             except Exception as e:
                 print(f"Model {model_name} failed: {e}")
-                # Fallback to rank-based prediction
-                ensemble_predictions.append(gap_ranks.values * model_weights[model_name])
-        
+                model_weights[model_name] = 1.0
+                ensemble_predictions.append(gap_ranks.values)
+
+        # Normalize weights
+        total_weight = sum(model_weights.values()) if model_weights else 1.0
         # Combine predictions
-        final_predictions = np.sum(ensemble_predictions, axis=0)
+        final_predictions = np.sum(ensemble_predictions, axis=0) / total_weight
         predicted_positions = pd.Series(final_predictions).rank().astype(int)
         
         # Enhanced confidence calculation using model variance

@@ -380,9 +380,48 @@ class F1RacePredictor:
         first_half_avg = times[:mid_point].mean()
         second_half_avg = times[mid_point:].mean()
         
+
         improvement = (first_half_avg - second_half_avg) / first_half_avg
         return improvement
-    
+
+    # ------------------------------------------------------------------
+    # Placeholder implementations for advanced analysis helpers
+    # These simplified versions allow the test suite to run without the
+    # full enhanced analysis modules present.
+    # ------------------------------------------------------------------
+
+    def _classify_stint_detailed(self, stint_laps):
+        """Basic stint classification stub."""
+        return {
+            'is_race_run': False,
+            'fuel_load': 'MEDIUM'
+        }
+
+    def enhanced_run_analysis(self, laps):
+        """Stub for advanced run analysis."""
+        return {
+            'qualifying_runs': [],
+            'race_runs': []
+        }
+
+    def _convert_enhanced_to_standard_format(self, runs, run_type):
+        """Convert stub data into a DataFrame."""
+        return pd.DataFrame(runs)
+
+    def validate_run_separation_quality(self, quali_df, race_df):
+        """Simple validation report used for tests."""
+        return {
+            'num_quali_runs': len(quali_df),
+            'num_race_runs': len(race_df)
+        }
+
+    def print_run_separation_report(self, report):
+        """Print validation information."""
+        print(
+            f"\nRun separation: {report['num_quali_runs']} quali runs, "
+            f"{report['num_race_runs']} race runs"
+        )
+
     def extract_weekend_features(self, gp_name):
         """Extract features from all practice sessions using enhanced run separation"""
         all_quali_runs = []

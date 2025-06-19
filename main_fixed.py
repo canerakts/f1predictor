@@ -662,6 +662,46 @@ class F1RacePredictor:
         
         return race_results.sort_values('Predicted_Finish'), overtaking_factor, track_category
 
+    def simulate_race(self, race_predictions, num_simulations=1000):
+        """Simple Monte Carlo simulation based on predicted results."""
+        if race_predictions.empty:
+            return pd.DataFrame()
+
+        drivers = race_predictions['Driver'].tolist()
+        results = {d: [] for d in drivers}
+
+        for _ in range(num_simulations):
+            sim_positions = {}
+            for _, row in race_predictions.iterrows():
+                pos = row['Predicted_Finish'] + np.random.normal(0, 2.0)
+                pos = np.clip(pos, 1, 20)
+                if np.random.rand() < row['DNF_Risk'] / 100:
+                    pos = 99
+                sim_positions[row['Driver']] = pos
+
+            finished = {d: p for d, p in sim_positions.items() if p != 99}
+            order = sorted(finished.items(), key=lambda x: x[1])
+            rank = 1
+            for drv, _ in order:
+                sim_positions[drv] = rank
+                rank += 1
+
+            for drv in drivers:
+                results[drv].append(sim_positions[drv])
+
+        summary = []
+        for drv, pos_list in results.items():
+            arr = np.array(pos_list)
+            dnfs = (arr == 99).sum()
+            finished = arr[arr != 99]
+            avg = finished.mean() if len(finished) > 0 else 20
+            win = (arr == 1).sum() / len(arr) * 100
+            dnf_rate = dnfs / len(arr) * 100
+            summary.append({'Driver': drv, 'Avg_Position': avg,
+                            'Win_Prob': win, 'DNF_Rate': dnf_rate})
+
+        return pd.DataFrame(summary).sort_values('Avg_Position')
+
     def generate_full_report(self, gp_name, race_length=58):
         """Generate comprehensive prediction report"""
         print(f"\n{'='*80}")
@@ -734,167 +774,36 @@ class F1RacePredictor:
         )
         
         if not race_predictions.empty:
-            # Show track characteristics first
+            # Show basic track characteristics
             print(f"\n📊 Track Characteristics: {track_category.replace('_', ' ').title()} Overtaking")
             print(f"   Expected Total Overtakes: {self.track_overtakes.get(gp_name, 'N/A')}")
-            print(f"   Grid Position Importance: {'Very High' if overtaking_factor < 0.3 else 'High' if overtaking_factor < 0.5 else 'Medium' if overtaking_factor < 0.7 else 'Low'}")
-            print(f"   Strategy Window: {'Narrow' if overtaking_factor < 0.3 else 'Limited' if overtaking_factor < 0.5 else 'Flexible' if overtaking_factor < 0.7 else 'Wide'}")
-            
+
             print(f"\n{'Pos':<4} {'Driver':<12} {'Grid':<6} {'Change':<8} "
                   f"{'DNF Risk':<10} {'Points %':<10} {'Pace':<6} {'Overtakes':<10}")
             print("-" * 80)
-            
-            for idx, row in race_predictions.iterrows():
+
+            for _, row in race_predictions.iterrows():
                 change_symbol = "↗️" if row['Positions_Change'] > 0 else "↘️" if row['Positions_Change'] < 0 else "→"
                 print(f"{row['Predicted_Finish']:<4} {row['Driver']:<12} "
                       f"P{row['Grid_Position']:<5} {row['Positions_Change']:+3d} {change_symbol:<4} "
                       f"{row['DNF_Risk']:<8.1f}% {row['Points_Probability']:<8.1f}% "
                       f"P{row['Race_Pace_Rank']:<5} {row['Expected_Overtakes']:<10.1f}")
-            
-            # Track-specific insights
-            print(f"\n💡 {gp_name} Specific Insights:")
-            print("-" * 70)
-            
-            # Find biggest movers based on track type
-            if overtaking_factor > 0.6:  # High overtaking tracks
-                big_gainers = race_predictions[race_predictions['Positions_Change'] > 3]
-                if not big_gainers.empty:
-                    print("\n🚀 Expected Big Gainers (High overtaking opportunity):")
-                    for _, driver in big_gainers.iterrows():
-                        print(f"   {driver['Driver']}: P{driver['Grid_Position']} → P{driver['Predicted_Finish']} "
-                              f"(+{driver['Positions_Change']} positions)")
-            else:  # Low overtaking tracks
-                stuck_in_position = race_predictions[abs(race_predictions['Positions_Change']) <= 1]
-                if len(stuck_in_position) > 10:
-                    print(f"\n🔒 Track Position Likely Decisive ({len(stuck_in_position)} drivers expected to finish near grid position)")
-                    print("   Qualifying will be crucial for points-scoring positions")
-            
-            # Strategy implications
-            if overtaking_factor < 0.3:
-                print("\n📋 Strategy Notes:")
-                print("   • Track position is king - avoid risky strategies")
-                print("   • Undercut/overcut windows will be critical")
-                print("   • Safety car could be race-defining")
-            elif overtaking_factor > 0.7:
-                print("\n📋 Strategy Notes:")
-                print("   • Multiple strategy options viable")
-                print("   • Aggressive strategies can pay off")
-                print("   • Tire degradation management crucial")
-            
-            # Find drivers with pace advantage stuck behind slower cars
-            pace_trapped = race_predictions[
-                (race_predictions['Race_Pace_Rank'] < race_predictions['Grid_Position'] - 3) &
-                (race_predictions['Positions_Change'] < 3)
-            ]
-            
-            if not pace_trapped.empty and overtaking_factor < 0.5:
-                print("\n⚠️  Fast Cars in Traffic (Limited overtaking opportunities):")
-                for _, driver in pace_trapped.iterrows():
-                    print(f"   {driver['Driver']}: Pace P{driver['Race_Pace_Rank']} but starting P{driver['Grid_Position']}")
-            
-            # DRS train probability
-            if gp_name in ['Spanish', 'Abu Dhabi', 'Hungarian']:
-                print("\n🚂 High DRS Train Probability")
-                print("   Positions 5-12 may get stuck in a DRS train")
         
         print("\n" + "="*80)
-        
+
+        # Run Monte Carlo simulation
+        mc_results = self.simulate_race(race_predictions)
+
         return {
             'qualifying': quali_predictions,
             'race': race_predictions,
+            'monte_carlo': mc_results,
             'historical_stats': historical_stats,
             'features': features,
             'track_category': track_category,
             'overtaking_factor': overtaking_factor
         }
     
-    def generate_betting_insights(self, predictions, gp_name):
-        """Generate specific betting/fantasy insights based on predictions"""
-        if not predictions or 'race' not in predictions:
-            return
-        
-        print("\n💰 BETTING & FANTASY INSIGHTS")
-        print("-" * 80)
-        
-        quali_pred = predictions['qualifying']
-        race_pred = predictions['race']
-        overtaking_factor = predictions['overtaking_factor']
-        
-        # Podium predictions
-        print("\n🏆 Podium Probabilities:")
-        podium_candidates = race_pred[race_pred['Predicted_Finish'] <= 6].copy()
-        for _, driver in podium_candidates.iterrows():
-            podium_prob = max(0, 100 - (driver['Predicted_Finish'] - 1) * 20 - driver['DNF_Risk'])
-            print(f"   {driver['Driver']}: {podium_prob:.1f}% chance")
-        
-        # Value picks for points
-        print("\n💎 Value Picks (Outside favorites with high points probability):")
-        value_picks = race_pred[
-            (race_pred['Predicted_Finish'] > 6) & 
-            (race_pred['Points_Probability'] > 60)
-        ]
-        for _, driver in value_picks.iterrows():
-            print(f"   {driver['Driver']}: P{driver['Predicted_Finish']} "
-                  f"({driver['Points_Probability']:.1f}% points probability)")
-        
-        # Head-to-head matchups
-        print("\n⚔️  Key Head-to-Head Battles:")
-        teammates = [
-            ('VER', 'PER'), ('HAM', 'RUS'), ('LEC', 'SAI'), 
-            ('NOR', 'PIA'), ('ALO', 'STR'), ('OCO', 'GAS'),
-            ('BOT', 'ZHO'), ('ALB', 'SAR'), ('MAG', 'HUL'),
-            ('TSU', 'LAW')
-        ]
-        
-        for driver1, driver2 in teammates:
-            if driver1 in race_pred['Driver'].values and driver2 in race_pred['Driver'].values:
-                pos1 = race_pred[race_pred['Driver'] == driver1]['Predicted_Finish'].iloc[0]
-                pos2 = race_pred[race_pred['Driver'] == driver2]['Predicted_Finish'].iloc[0]
-                if abs(pos1 - pos2) <= 2:
-                    print(f"   {driver1} (P{pos1}) vs {driver2} (P{pos2}) - Close battle expected")
-        
-        # Track-specific recommendations
-        if overtaking_factor < 0.3:
-            print("\n📌 Low Overtaking Track Strategy:")
-            print("   • Bet on qualifying specialists")
-            print("   • Avoid betting on comeback drives")
-            print("   • Safety car could shuffle order significantly")
-        else:
-            print("\n📌 High Overtaking Track Strategy:")
-            print("   • Look for fast cars starting out of position")
-            print("   • Consider 'most overtakes' bets")
-            print("   • Points finishes more unpredictable")
-
-    def export_predictions(self, predictions, gp_name):
-        """Export all predictions to CSV files"""
-        if not predictions:
-            return
-        
-        # Export qualifying predictions
-        if 'qualifying' in predictions:
-            quali_file = f'{gp_name}_{self.year}_qualifying_predictions.csv'
-            predictions['qualifying'].to_csv(quali_file, index=False)
-            print(f"\n✅ Qualifying predictions saved to {quali_file}")
-        
-        # Export race predictions
-        if 'race' in predictions:
-            race_file = f'{gp_name}_{self.year}_race_predictions.csv'
-            predictions['race'].to_csv(race_file, index=False)
-            print(f"✅ Race predictions saved to {race_file}")
-        
-        # Export combined summary
-        if 'qualifying' in predictions and 'race' in predictions:
-            summary = predictions['qualifying'][['Driver', 'Predicted_Position']].merge(
-                predictions['race'][['Driver', 'Predicted_Finish', 'Positions_Change', 
-                                   'Points_Probability', 'Expected_Overtakes']],
-                on='Driver'
-            )
-            summary.columns = ['Driver', 'Quali_Pred', 'Race_Pred', 'Positions_Change', 
-                             'Points_Prob', 'Expected_Overtakes']
-            
-            summary_file = f'{gp_name}_{self.year}_summary.csv'
-            summary.to_csv(summary_file, index=False)
-            print(f"✅ Summary saved to {summary_file}")
 
 # Main execution
 if __name__ == "__main__":
@@ -922,49 +831,10 @@ if __name__ == "__main__":
         weight = np.exp(-0.15 * i) * (0.9 if year < predictor.year else 1.0)
         print(f"   {i+1}. {year} {race} (Round {round_num}) - Weight: {weight:.3f}")
     
-    try:
-        # Generate predictions
-        predictions = predictor.generate_full_report(gp_name)
-        
-        if predictions:
-            # Generate betting insights
-            predictor.generate_betting_insights(predictions, gp_name)
-            
-            # Export all predictions
-            predictor.export_predictions(predictions, gp_name)
-            
-            # Additional analysis for specific track types
-            if predictions['track_category'] == 'very_low':
-                print(f"\n🏁 {gp_name} Special Notes:")
-                print("   • Qualifying is 80% of the race result")
-                print("   • First lap incidents could define the race")
-                print("   • Pit stop timing crucial for position gains")
-            elif predictions['track_category'] == 'very_high':
-                print(f"\n🏁 {gp_name} Special Notes:")
-                print("   • Multiple winners possible from outside front row")
-                print("   • Tire management will be crucial")
-                print("   • Late race charges very possible")
-            
-            # Show confidence metrics
-            print("\n📊 Prediction Confidence Metrics:")
-            print("-" * 70)
-            if 'qualifying' in predictions and 'race' in predictions:
-                avg_quali_conf = predictions['qualifying']['Confidence'].mean()
-                print(f"   Average Qualifying Confidence: {avg_quali_conf:.1f}%")
-                
-                avg_position_change = abs(predictions['race']['Positions_Change']).mean()
-                print(f"   Average Position Changes Expected: {avg_position_change:.1f}")
-                
-                high_risk_drivers = predictions['race'][predictions['race']['DNF_Risk'] > 15]
-                if not high_risk_drivers.empty:
-                    print(f"   High DNF Risk Drivers: {', '.join(high_risk_drivers['Driver'].tolist())}")
-        
-    except Exception as e:
-        print(f"\n❌ Error occurred: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    print("\n" + "="*80)
-    print("Analysis complete! 🏁")
-    print(f"\nNote: Predictions based on practice data and historical performance.")
-    print(f"Track overtaking characteristics have been factored into race predictions.")
+    predictions = predictor.generate_full_report(gp_name)
+
+    if predictions and not predictions['monte_carlo'].empty:
+        print("\n🎲 Monte Carlo Summary:")
+        for _, row in predictions['monte_carlo'].head(5).iterrows():
+            print(f"   {row['Driver']}: Avg P{row['Avg_Position']:.1f}, "
+                  f"Win {row['Win_Prob']:.1f}%, DNF {row['DNF_Rate']:.1f}%")

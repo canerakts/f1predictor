@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""
-Test script for the enhanced Monte Carlo simulation with dynamic blurriness
-"""
+"""Test script for the enhanced Monte Carlo simulation with dynamic blurriness"""
+
+import pytest
+
+# Skip tests when pandas is unavailable
+pytest.importorskip("pandas")
 
 try:
     print("🎲 Testing Enhanced Monte Carlo with Dynamic Blurriness...")

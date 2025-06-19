@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""
-Test script to demonstrate the enhanced qualifying and race run separation
-"""
+"""Test script to demonstrate the enhanced qualifying and race run separation"""
+
+import pytest
+
+# Skip tests when pandas is unavailable
+pytest.importorskip("pandas")
 
 from test import F1RacePredictor
 

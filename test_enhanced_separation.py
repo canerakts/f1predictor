@@ -6,7 +6,7 @@ import pytest
 # Skip tests when pandas is unavailable
 pytest.importorskip("pandas")
 
-from test import F1RacePredictor
+from simple_predictor import F1RacePredictor
 
 def test_enhanced_separation():
     """Test the enhanced run separation system"""

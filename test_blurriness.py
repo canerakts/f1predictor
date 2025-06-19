@@ -8,7 +8,7 @@ pytest.importorskip("pandas")
 
 try:
     print("🎲 Testing Enhanced Monte Carlo with Dynamic Blurriness...")
-    from test import F1RacePredictor
+    from simple_predictor import F1RacePredictor
     print("✅ Import successful")
     
     predictor = F1RacePredictor(2025)

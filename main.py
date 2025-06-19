@@ -51,7 +51,7 @@ class F1RacePredictor:
             return pd.DataFrame(columns=['Driver', 'LapTime'])
 
     def extract_weekend_features(self, gp_name):
-        """Return lap based aggregates from practice sessions."""
+        """Return lap aggregates separating quali-style and race-style runs."""
         all_laps = []
         year = self.year if self.year <= datetime.now().year else datetime.now().year
         for session in ['FP1', 'FP2', 'FP3']:
@@ -62,13 +62,29 @@ class F1RacePredictor:
             return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
         laps = pd.concat(all_laps)
-        quali_runs = laps.groupby('Driver')['LapTime'].min().reset_index()
+
+        # Split laps into "qualifying" style and "race" style
+        driver_best = laps.groupby('Driver')['LapTime'].transform('min')
+        quali_mask = laps['LapTime'] <= driver_best * 1.05
+        quali_laps = laps[quali_mask]
+        race_laps = laps[~quali_mask]
+
+        if quali_laps.empty:
+            quali_laps = laps
+        if race_laps.empty:
+            race_laps = laps
+
+        quali_runs = (
+            quali_laps.groupby('Driver')['LapTime'].min().reset_index()
+        )
         quali_runs.rename(columns={'LapTime': 'BestLap'}, inplace=True)
 
-        race_runs = laps.groupby('Driver')['LapTime'].mean().reset_index()
+        race_runs = (
+            race_laps.groupby('Driver')['LapTime'].mean().reset_index()
+        )
         race_runs.rename(columns={'LapTime': 'AvgLap'}, inplace=True)
 
-        stats = laps.groupby('Driver')['LapTime'].agg(['median', 'std', 'count']).reset_index()
+        stats = race_laps.groupby('Driver')['LapTime'].agg(['median', 'std', 'count']).reset_index()
         stats.rename(columns={'median': 'MedianLap', 'std': 'LapStd', 'count': 'NumLaps'}, inplace=True)
 
         return quali_runs, race_runs, stats

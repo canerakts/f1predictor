@@ -1426,36 +1426,6 @@ class F1RacePredictor:
         print("\n🏁 RACE PREDICTIONS")
         print("-" * 80)
         race_predictions = self.predict_race_with_enhanced_ml(features, quali_predictions, gp_name)
-        
-        # Apply advanced confidence calculation to race predictions
-        if not race_predictions.empty and model_performance:
-            try:
-                # Add weather analysis for confidence adjustment
-                session = fastf1.get_session(self.year if self.year <= datetime.now().year else 2024, 
-                                           gp_name, 'FP1')
-                session.load()
-                weather_impact = self.analyze_weather_impact(session, pd.DataFrame())
-                
-                data_quality['weather_penalty'] = weather_impact['weather_penalty']
-                
-                # Calculate advanced confidence for race predictions
-                advanced_confidence = self.calculate_advanced_confidence(
-                    race_predictions, model_performance, data_quality
-                )
-                
-                # Update race prediction confidence scores
-                race_predictions['Advanced_Confidence'] = advanced_confidence
-                
-                print(f"🌤️ Weather Impact Analysis:")
-                print(f"   Weather Penalty: {weather_impact['weather_penalty']:.2f}")
-                if weather_impact['rainfall_effect'] > 0:
-                    print(f"   Rainfall Effect: {weather_impact['rainfall_effect']:.2f}s")
-                if weather_impact['wind_effect'] > 0:
-                    print(f"   Wind Effect: {weather_impact['wind_effect']:.2f}s")
-                    
-            except Exception as e:
-                print(f"⚠️ Advanced confidence calculation failed: {e}")
-
         # Get track characteristics for analysis
         overtaking_factor, track_category = self.get_track_overtaking_factor(gp_name)
         
@@ -1507,29 +1477,6 @@ class F1RacePredictor:
         if not race_predictions.empty and 'Advanced_Confidence' in race_predictions.columns:
             avg_race_conf = race_predictions['Advanced_Confidence'].mean()
             print(f"   Average Race Confidence (Advanced): {avg_race_conf:.1f}%")
-        
-        # Tire Strategy Analysis
-        print(f"\n🏎️ Tire Strategy Analysis:")
-        print("-" * 60)
-        try:
-            tire_analysis = self.analyze_tire_strategy_impact(race_runs, gp_name)
-            
-            if tire_analysis['compound_pace_difference']:
-                print("Tire Compound Performance:")
-                for compounds, pace_diff in tire_analysis['compound_pace_difference'].items():
-                    print(f"   {compounds}: {pace_diff:+.3f}s difference")
-            
-            if tire_analysis['optimal_strategy']:
-                print(f"Optimal Strategy: {tire_analysis['optimal_strategy']}")
-                print(f"Strategy Flexibility: {tire_analysis['strategy_flexibility']:.1f}/10")
-            else:
-                print("   Insufficient tire data for strategy analysis")
-                
-        except Exception as e:
-            print(f"   ⚠️ Tire analysis error: {e}")
-
-        # Generate betting insights
-        self.generate_betting_insights(predictions, gp_name)
           # Run enhanced Monte Carlo simulation with dynamic blurriness
         print(f"\n🎲 ENHANCED MONTE CARLO SIMULATION")
         print("-" * 80)
@@ -1552,9 +1499,6 @@ class F1RacePredictor:
         except Exception as e:
             print(f"❌ Monte Carlo simulation error: {e}")
             print("   Continuing without simulation analysis...")
-
-        # Export predictions
-        self.export_predictions(predictions, gp_name)
         
         return predictions
 
@@ -1901,149 +1845,6 @@ class F1RacePredictor:
         
         return model_scores, model_performance
 
-    def analyze_weather_impact(self, session, race_runs):
-        """Analyze weather impact on race predictions"""
-        try:
-            weather_data = session.weather_data
-            if weather_data.empty:
-                return {'weather_penalty': 0.0, 'rainfall_effect': 0.0, 'wind_effect': 0.0}
-            
-            # Calculate weather penalties
-            avg_rainfall = weather_data['Rainfall'].mean() if 'Rainfall' in weather_data.columns else 0
-            avg_wind_speed = weather_data['WindSpeed'].mean() if 'WindSpeed' in weather_data.columns else 0
-            
-            weather_penalty = min(avg_rainfall * 0.1 + avg_wind_speed * 0.02, 1.0)
-            
-            return {
-                'weather_penalty': weather_penalty,
-                'rainfall_effect': avg_rainfall,
-                'wind_effect': avg_wind_speed
-            }
-        except:
-            return {'weather_penalty': 0.0, 'rainfall_effect': 0.0, 'wind_effect': 0.0}
-
-    def analyze_tire_strategy_impact(self, race_runs, gp_name):
-        """Analyze tire strategy and degradation patterns"""
-        tire_analysis = {
-            'compound_pace_difference': {},
-            'degradation_rates': {},
-            'optimal_strategy': None,
-            'strategy_flexibility': 0.0
-        }
-        
-        if race_runs.empty:
-            return tire_analysis
-        
-        # Track-specific tire factors
-        track_tire_factors = {
-            'Monaco': {'degradation_factor': 0.7, 'compound_difference': 0.3},
-            'Hungary': {'degradation_factor': 0.8, 'compound_difference': 0.4},
-            'Spain': {'degradation_factor': 1.2, 'compound_difference': 0.8},
-            'Canada': {'degradation_factor': 1.0, 'compound_difference': 0.6},
-            'Austria': {'degradation_factor': 1.3, 'compound_difference': 0.9},
-            'Bahrain': {'degradation_factor': 1.4, 'compound_difference': 1.0}
-        }
-        
-        track_factor = track_tire_factors.get(gp_name, {'degradation_factor': 1.0, 'compound_difference': 0.6})
-        tire_analysis['optimal_strategy'] = 'Medium-Hard'
-        tire_analysis['strategy_flexibility'] = 7.5
-        
-        return tire_analysis
-
-    def generate_betting_insights(self, predictions, gp_name):
-        """Generate betting insights based on predictions"""
-        if not predictions or 'qualifying' not in predictions or 'race' not in predictions:
-            return
-        
-        print(f"\n💰 BETTING INSIGHTS - {gp_name} GP")
-        print("-" * 60)
-        
-        quali_preds = predictions['qualifying']
-        race_preds = predictions['race']
-        
-        # Pole position value bets
-        pole_candidates = quali_preds[quali_preds['Pole_Probability'] > 15].head(3)
-        if not pole_candidates.empty:
-            print("🏆 Pole Position Value Bets:")
-            for _, row in pole_candidates.iterrows():
-                confidence_level = "High" if row['Confidence'] > 70 else "Medium"
-                print(f"   {row['Driver']}: {row['Pole_Probability']:.0f}% chance ({confidence_level} confidence)")
-        
-        # Race winner candidates
-        race_winners = race_preds[race_preds['Predicted_Finish'] <= 3]
-        if not race_winners.empty:
-            print("\n🏁 Race Winner Candidates:")
-            for _, row in race_winners.iterrows():
-                grid_pos = row['Grid_Position']
-                change = row['Positions_Change']
-                if change > 0:
-                    print(f"   {row['Driver']}: P{grid_pos} → P{row['Predicted_Finish']} "
-                          f"({change:+d} positions, {row['Points_Probability']:.0f}% points chance)")
-          # Dark horses (big position gains)
-        dark_horses = race_preds[race_preds['Positions_Change'] >= 3].head(3)
-        if not dark_horses.empty:
-            print("\n🌟 Dark Horse Candidates:")
-            for _, row in dark_horses.iterrows():
-                print(f"   {row['Driver']}: P{row['Grid_Position']} → P{row['Predicted_Finish']} "
-                      f"({row['Positions_Change']:+d} positions)")
-
-    def export_predictions(self, predictions, gp_name):
-        """Export predictions to CSV files including Monte Carlo results"""
-        if not predictions:
-            return
-        
-        # Export qualifying predictions
-        if 'qualifying' in predictions:
-            quali_file = f"{gp_name}_{self.year}_qualifying_predictions.csv"
-            predictions['qualifying'].to_csv(quali_file, index=False)
-            print(f"\n📄 Qualifying predictions exported to: {quali_file}")
-        
-        # Export race predictions
-        if 'race' in predictions:
-            race_file = f"{gp_name}_{self.year}_race_predictions.csv"
-            predictions['race'].to_csv(race_file, index=False)
-            print(f"📄 Race predictions exported to: {race_file}")
-        
-        # Export Monte Carlo simulation results
-        if 'monte_carlo' in predictions:
-            mc_file = f"{gp_name}_{self.year}_monte_carlo_simulation.csv"
-            predictions['monte_carlo'].to_csv(mc_file, index=False)
-            print(f"📄 Monte Carlo simulation exported to: {mc_file}")
-        
-        # Export enhanced summary with uncertainty metrics
-        summary_file = f"{gp_name}_{self.year}_summary.csv"
-        summary_data = {
-            'GP': [gp_name],
-            'Year': [self.year],
-            'Track_Category': [predictions.get('track_category', 'unknown')],
-            'Predictions_Generated': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
-            'Monte_Carlo_Included': ['monte_carlo' in predictions],
-            'Uncertainty_Analysis': [True]
-        }
-        pd.DataFrame(summary_data).to_csv(summary_file, index=False)
-        print(f"📄 Enhanced summary exported to: {summary_file}")
-
-    def calculate_advanced_confidence(self, predictions, model_performance, data_quality):
-        """Calculate sophisticated confidence scores based on multiple factors"""
-        base_confidence = 50
-        
-        # Model performance component (0-25 points)
-        if model_performance:
-            avg_stability = np.mean([perf.get('model_stability', 0.5) for perf in model_performance.values()])
-            avg_mae = np.mean([perf.get('cv_mae_mean', 2.0) for perf in model_performance.values()])
-            
-            # Lower MAE = higher confidence
-            model_confidence = 25 * (1 - min(avg_mae / 5, 1))  # Cap at position 5 error
-            stability_bonus = 15 * avg_stability
-        else:
-            model_confidence = 15
-            stability_bonus = 10
-        
-        # Data quality component (0-20 points)
-        data_confidence = 20 * data_quality.get('completeness', 0.5)
-        
-        # Calculate final confidence
-        final_confidence = base_confidence + model_confidence + stability_bonus + data_confidence
         
         return np.clip(final_confidence, 20, 98)  # Keep between 20-98%
     

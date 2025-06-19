@@ -58,22 +58,31 @@ class F1RacePredictor:
             if not laps.empty:
                 all_laps.append(laps)
         if not all_laps:
-            return pd.DataFrame(), pd.DataFrame()
+            return (pd.DataFrame(), pd.DataFrame(),
+                    pd.DataFrame(), pd.DataFrame())
         laps = pd.concat(all_laps)
         quali_runs = laps.groupby('Driver')['LapTime'].min().reset_index()
         quali_runs.rename(columns={'LapTime': 'BestLap'}, inplace=True)
         race_runs = laps.groupby('Driver')['LapTime'].mean().reset_index()
         race_runs.rename(columns={'LapTime': 'AvgLap'}, inplace=True)
-        return quali_runs, race_runs
+        lap_counts = laps.groupby('Driver')['LapTime'].count().reset_index()
+        lap_counts.rename(columns={'LapTime': 'LapCount'}, inplace=True)
+        lap_std = laps.groupby('Driver')['LapTime'].std().reset_index()
+        lap_std.rename(columns={'LapTime': 'LapSTD'}, inplace=True)
+        return quali_runs, race_runs, lap_counts, lap_std
 
     # ------------------------------------------------------------------
     # Feature preparation
     # ------------------------------------------------------------------
-    def prepare_features_for_ml(self, quali_runs, race_runs):
+    def prepare_features_for_ml(self, quali_runs, race_runs, lap_counts, lap_std):
         if quali_runs.empty:
             return pd.DataFrame()
         features = quali_runs.merge(race_runs, on='Driver', how='left')
+        features = features.merge(lap_counts, on='Driver', how='left')
+        features = features.merge(lap_std, on='Driver', how='left')
         features['AvgLap'].fillna(features['BestLap'], inplace=True)
+        features['LapCount'].fillna(0, inplace=True)
+        features['LapSTD'].fillna(pd.Timedelta(0), inplace=True)
         fastest = features['BestLap'].min()
         features['gap_to_fastest'] = features['BestLap'] - fastest
         return features
@@ -86,7 +95,10 @@ class F1RacePredictor:
             return pd.DataFrame()
         features = features.sort_values('BestLap')
         features['Predicted_Position'] = range(1, len(features) + 1)
-        features['Confidence'] = 100 - features['gap_to_fastest'].rank(pct=True) * 50
+        max_std = features['LapSTD'].dt.total_seconds().max() or 1
+        conf = 100 - features['gap_to_fastest'].rank(pct=True) * 40
+        conf -= (features['LapSTD'].dt.total_seconds() / max_std) * 10
+        features['Confidence'] = conf.clip(0, 100)
         return features[['Driver', 'Predicted_Position', 'Confidence']]
 
     # ------------------------------------------------------------------
@@ -98,9 +110,12 @@ class F1RacePredictor:
         grid = dict(zip(quali_predictions['Driver'], quali_predictions['Predicted_Position']))
         features['Grid'] = features['Driver'].map(grid).fillna(20)
         features['pace_rank'] = features['AvgLap'].rank()
-        score = features['Grid'] * 0.4 + features['pace_rank'] * 0.6
+        features['consistency_rank'] = features['LapSTD'].rank()
+        score = (features['Grid'] * 0.4 +
+                features['pace_rank'] * 0.5 +
+                features['consistency_rank'] * 0.1)
         features['Predicted_Finish'] = score.rank().astype(int)
-        return features[['Driver', 'Predicted_Finish', 'Grid']].sort_values('Predicted_Finish')
+        return features[['Driver', 'Predicted_Finish', 'Grid', 'LapSTD']].sort_values('Predicted_Finish')
 
     # ------------------------------------------------------------------
     # Monte Carlo simulation
@@ -111,8 +126,11 @@ class F1RacePredictor:
         results = []
         drivers = race_predictions['Driver'].tolist()
         base_pos = race_predictions['Predicted_Finish'].values.astype(float)
+        variability = race_predictions['LapSTD'].fillna(pd.Timedelta(0)).dt.total_seconds()
+        max_var = variability.max() if variability.max() > 0 else 1
+        variability = variability / max_var
         for _ in range(num_sim):
-            noise = np.random.normal(0, 1.5, size=len(base_pos))
+            noise = np.random.normal(0, 1.5 + variability)
             pos = np.clip(base_pos + noise, 1, 20)
             order = pd.Series(pos).rank().astype(int)
             results.append(order)
@@ -133,8 +151,8 @@ class F1RacePredictor:
     # End-to-end pipeline
     # ------------------------------------------------------------------
     def run_prediction(self, gp_name):
-        quali_runs, race_runs = self.extract_weekend_features(gp_name)
-        features = self.prepare_features_for_ml(quali_runs, race_runs)
+        quali_runs, race_runs, lap_counts, lap_std = self.extract_weekend_features(gp_name)
+        features = self.prepare_features_for_ml(quali_runs, race_runs, lap_counts, lap_std)
         quali_pred = self.predict_qualifying(features)
         race_pred = self.predict_race(features, quali_pred)
         monte_carlo = self.simulate_race(race_pred)

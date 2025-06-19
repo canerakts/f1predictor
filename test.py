@@ -2360,52 +2360,12 @@ def main():
             'Italian', 'Azerbaijan', 'Singapore', 'United States',
             'Mexico City', 'São Paulo', 'Las Vegas', 'Qatar', 'Abu Dhabi'
         ]
+    
         
-        print("📅 Available Grand Prix races for 2025:")
-        for i, gp in enumerate(available_gps, 1):
-            print(f"{i:2d}. {gp} Grand Prix")
         
-        # Get user input
-        print("\n" + "=" * 50)
-        print("📊 Quick Start Options:")
-        print("1. Canadian Grand Prix (Current weekend)")
-        print("2. Monaco Grand Prix (Previous race)")
-        print("3. Spanish Grand Prix (Previous race)")
-        print("4. Custom Grand Prix selection")
-        print("5. Run all available races")
+        selected_gps = ['Canadian']
         
-        choice = input("\nEnter your choice (1-5): ").strip()
         
-        selected_gps = []
-        
-        if choice == '1':
-            selected_gps = ['Canadian']
-        elif choice == '2':
-            selected_gps = ['Monaco']
-        elif choice == '3':
-            selected_gps = ['Spanish']
-        elif choice == '4':
-            print("\n📋 Select a Grand Prix by number:")
-            try:
-                gp_choice = int(input("Enter GP number (1-24): ")) - 1
-                if 0 <= gp_choice < len(available_gps):
-                    selected_gps = [available_gps[gp_choice]]
-                else:
-                    print("❌ Invalid selection. Using Canadian GP as default.")
-                    selected_gps = ['Canadian']
-            except ValueError:
-                print("❌ Invalid input. Using Canadian GP as default.")
-                selected_gps = ['Canadian']
-        elif choice == '5':
-            print("⚠️  Running all races will take significant time...")
-            confirm = input("Continue? (y/n): ").lower()
-            if confirm == 'y':
-                selected_gps = available_gps[:5]  # Limit to first 5 for demo
-            else:
-                selected_gps = ['Canadian']
-        else:
-            print("❌ Invalid choice. Using Canadian GP as default.")
-            selected_gps = ['Canadian']
         
         # Run predictions for selected Grand Prix
         print(f"\n🚀 Starting predictions for {len(selected_gps)} Grand Prix...")

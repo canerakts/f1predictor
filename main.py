@@ -43,12 +43,16 @@ class F1RacePredictor:
             session = fastf1.get_session(year, gp_name, session_type)
             session.load()
             laps = session.laps
+            if not isinstance(laps, pd.DataFrame):
+                return pd.DataFrame(columns=['Driver', 'LapTime', 'Session'])
             laps = laps[laps['LapTime'].notna()]
             laps = laps[laps['PitOutTime'].isna()]
-            return laps[['Driver', 'LapTime']]
+            data = laps[['Driver', 'LapTime']].copy()
+            data['Session'] = session_type
+            return data
         except Exception as exc:  # pragma: no cover - network issues
             print(f"Error loading {session_type}: {exc}")
-            return pd.DataFrame(columns=['Driver', 'LapTime'])
+            return pd.DataFrame(columns=['Driver', 'LapTime', 'Session'])
 
     def extract_weekend_features(self, gp_name):
         all_laps = []
@@ -56,26 +60,53 @@ class F1RacePredictor:
         for session in ['FP1', 'FP2', 'FP3']:
             laps = self.collect_practice_data(year, gp_name, session)
             if not laps.empty:
+                laps['Session'] = session
                 all_laps.append(laps)
         if not all_laps:
-            return pd.DataFrame(), pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
         laps = pd.concat(all_laps)
+
         quali_runs = laps.groupby('Driver')['LapTime'].min().reset_index()
         quali_runs.rename(columns={'LapTime': 'BestLap'}, inplace=True)
+
         race_runs = laps.groupby('Driver')['LapTime'].mean().reset_index()
         race_runs.rename(columns={'LapTime': 'AvgLap'}, inplace=True)
-        return quali_runs, race_runs
+
+        # additional statistics for improved predictions
+        laps_completed = laps.groupby('Driver').size().reset_index(name='Laps')
+        consistency = laps.groupby('Driver')['LapTime'].std().reset_index()
+        consistency.rename(columns={'LapTime': 'Consistency'}, inplace=True)
+
+        session_best = laps.groupby(['Driver', 'Session'])['LapTime'].min().reset_index()
+        order = sorted(session_best['Session'].unique())
+        pivot = session_best.pivot(index='Driver', columns='Session', values='LapTime').reindex(columns=order)
+        first_best = pivot[order[0]]
+        last_best = pivot[order[-1]]
+        improvement = (first_best - last_best).fillna(0).reset_index(name='Improvement')
+
+        stats = laps_completed.merge(consistency, on='Driver', how='left').merge(improvement, on='Driver', how='left')
+        return quali_runs, race_runs, stats
 
     # ------------------------------------------------------------------
     # Feature preparation
     # ------------------------------------------------------------------
-    def prepare_features_for_ml(self, quali_runs, race_runs):
+    def prepare_features_for_ml(self, quali_runs, race_runs, stats=None):
         if quali_runs.empty:
             return pd.DataFrame()
+
         features = quali_runs.merge(race_runs, on='Driver', how='left')
         features['AvgLap'].fillna(features['BestLap'], inplace=True)
         fastest = features['BestLap'].min()
         features['gap_to_fastest'] = features['BestLap'] - fastest
+
+        if stats is not None and not stats.empty:
+            features = features.merge(stats, on='Driver', how='left')
+        else:
+            features['Laps'] = 0
+            features['Consistency'] = features['AvgLap'].std()
+            features['Improvement'] = 0
+
+        features.fillna({'Laps': 0, 'Consistency': features['AvgLap'].std(), 'Improvement': 0}, inplace=True)
         return features
 
     # ------------------------------------------------------------------
@@ -84,9 +115,16 @@ class F1RacePredictor:
     def predict_qualifying(self, features):
         if features.empty:
             return pd.DataFrame()
-        features = features.sort_values('BestLap')
+        features = features.copy()
+        score = (
+            features['BestLap']
+            - features['Improvement'] * 0.1
+            + features['Consistency'] * 0.05
+        )
+        features['qualifying_score'] = score
+        features = features.sort_values('qualifying_score')
         features['Predicted_Position'] = range(1, len(features) + 1)
-        features['Confidence'] = 100 - features['gap_to_fastest'].rank(pct=True) * 50
+        features['Confidence'] = 100 - features['qualifying_score'].rank(pct=True) * 50
         return features[['Driver', 'Predicted_Position', 'Confidence']]
 
     # ------------------------------------------------------------------
@@ -97,7 +135,12 @@ class F1RacePredictor:
             return pd.DataFrame()
         grid = dict(zip(quali_predictions['Driver'], quali_predictions['Predicted_Position']))
         features['Grid'] = features['Driver'].map(grid).fillna(20)
-        features['pace_rank'] = features['AvgLap'].rank()
+        pace_score = (
+            features['AvgLap']
+            - features['Improvement'] * 0.1
+            + features['Consistency'] * 0.05
+        )
+        features['pace_rank'] = pace_score.rank()
         score = features['Grid'] * 0.4 + features['pace_rank'] * 0.6
         features['Predicted_Finish'] = score.rank().astype(int)
         return features[['Driver', 'Predicted_Finish', 'Grid']].sort_values('Predicted_Finish')
@@ -133,8 +176,8 @@ class F1RacePredictor:
     # End-to-end pipeline
     # ------------------------------------------------------------------
     def run_prediction(self, gp_name):
-        quali_runs, race_runs = self.extract_weekend_features(gp_name)
-        features = self.prepare_features_for_ml(quali_runs, race_runs)
+        quali_runs, race_runs, stats = self.extract_weekend_features(gp_name)
+        features = self.prepare_features_for_ml(quali_runs, race_runs, stats)
         quali_pred = self.predict_qualifying(features)
         race_pred = self.predict_race(features, quali_pred)
         monte_carlo = self.simulate_race(race_pred)

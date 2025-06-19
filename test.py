@@ -1675,18 +1675,33 @@ class F1RacePredictor:
             uncertainty_scale * np.random.normal(0, 1.0, len(features))  # Quality-adjusted race variability
         )
         
-        # Train and predict
+        # Train, validate and predict with weighting based on CV performance
         ensemble_predictions = []
+        model_weights = []
         for model_name, model in models.items():
             try:
+                cv_scores = cross_val_score(model, X, race_targets,
+                                           cv=3,
+                                           scoring='neg_mean_absolute_error')
+                cv_mae = -cv_scores.mean()
+                weight = 1.0 / (cv_mae + 1e-6)
+
                 model.fit(X, race_targets)
                 pred = model.predict(X)
+
                 ensemble_predictions.append(pred)
+                model_weights.append(weight)
             except Exception as e:
                 print(f"Race model {model_name} failed: {e}")
                 ensemble_predictions.append(race_targets)
-          # Average ensemble predictions
-        final_race_predictions = np.mean(ensemble_predictions, axis=0)
+                model_weights.append(0.0)
+
+        if np.sum(model_weights) > 0:
+            final_race_predictions = np.average(
+                np.vstack(ensemble_predictions), axis=0, weights=model_weights)
+        else:
+            final_race_predictions = np.mean(ensemble_predictions, axis=0)
+
         raw_predicted_positions = pd.Series(final_race_predictions).rank().astype(int)
         
         # Apply realistic constraints to prevent unrealistic swings

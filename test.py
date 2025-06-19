@@ -1111,8 +1111,17 @@ class F1RacePredictor:
         
         return results.sort_values('Predicted_Position')
     
-    def predict_qualifying_with_ml(self, features):
-        """Enhanced qualifying predictions using machine learning models"""
+    def predict_qualifying_with_ml(self, features, model_performance=None):
+        """Enhanced qualifying predictions using machine learning models
+
+        Parameters
+        ----------
+        features : DataFrame
+            Prepared feature set for the current weekend.
+        model_performance : dict, optional
+            Performance metrics returned by ``validate_ml_models`` used to
+            dynamically weight the ensemble models.
+        """
         if features.empty:
             return pd.DataFrame()
         
@@ -1159,9 +1168,22 @@ class F1RacePredictor:
         }
         synthetic_y = self._create_synthetic_targets(ml_features, data_quality_info)
         
-        # Train models
+        # Determine model weights
+        if model_performance:
+            weights = {}
+            for name in models.keys():
+                perf = model_performance.get(name, {})
+                mae = perf.get('cv_mae_mean', None)
+                if mae and mae > 0:
+                    weights[name] = 1 / mae
+                else:
+                    weights[name] = 1.0
+            total = sum(weights.values())
+            model_weights = {k: v / total for k, v in weights.items()}
+        else:
+            model_weights = {'rf': 0.35, 'gbm': 0.35, 'xgb': 0.30}
+
         ensemble_predictions = []
-        model_weights = {'rf': 0.35, 'gbm': 0.35, 'xgb': 0.30}
         
         for model_name, model in models.items():
             try:
@@ -1391,7 +1413,7 @@ class F1RacePredictor:
         # Generate enhanced qualifying predictions
         print("\n🏁 QUALIFYING PREDICTIONS")
         print("-" * 80)
-        quali_predictions = self.predict_qualifying_with_ml(features)
+        quali_predictions = self.predict_qualifying_with_ml(features, model_performance)
         
         if not quali_predictions.empty:
             # Enhanced display with ML insights
@@ -1425,7 +1447,7 @@ class F1RacePredictor:
                     print(f"   {feature}: {importance:.3f} importance")        # Generate race predictions with enhanced ML and confidence scoring
         print("\n🏁 RACE PREDICTIONS")
         print("-" * 80)
-        race_predictions = self.predict_race_with_enhanced_ml(features, quali_predictions, gp_name)
+        race_predictions = self.predict_race_with_enhanced_ml(features, quali_predictions, gp_name, model_performance)
         
         # Apply advanced confidence calculation to race predictions
         if not race_predictions.empty and model_performance:
@@ -1604,8 +1626,18 @@ class F1RacePredictor:
         
         return synthetic_target
     
-    def predict_race_with_enhanced_ml(self, features, quali_predictions, gp_name="Canadian"):
-        """Predict race results using enhanced ML with dynamic overtaking factors"""
+    def predict_race_with_enhanced_ml(self, features, quali_predictions, gp_name="Canadian", model_performance=None):
+        """Predict race results using enhanced ML with dynamic overtaking factors
+
+        Parameters
+        ----------
+        features : DataFrame
+            Feature matrix prepared by ``prepare_features_for_ml``.
+        quali_predictions : DataFrame
+            Predicted qualifying positions.
+        model_performance : dict, optional
+            Performance metrics for weighting the ensemble models.
+        """
         if features.empty or quali_predictions.empty:
             return pd.DataFrame()
         
@@ -1675,18 +1707,35 @@ class F1RacePredictor:
             uncertainty_scale * np.random.normal(0, 1.0, len(features))  # Quality-adjusted race variability
         )
         
+        # Determine model weights if performance metrics are provided
+        if model_performance:
+            weights = {}
+            for name in models.keys():
+                perf = model_performance.get(name, {})
+                mae = perf.get('cv_mae_mean', None)
+                if mae and mae > 0:
+                    weights[name] = 1 / mae
+                else:
+                    weights[name] = 1.0
+            total = sum(weights.values())
+            model_weights = {k: v / total for k, v in weights.items()}
+        else:
+            # Default to equal weighting
+            model_weights = {name: 1 / len(models) for name in models}
+
         # Train and predict
         ensemble_predictions = []
         for model_name, model in models.items():
             try:
                 model.fit(X, race_targets)
                 pred = model.predict(X)
-                ensemble_predictions.append(pred)
+                ensemble_predictions.append(pred * model_weights[model_name])
             except Exception as e:
                 print(f"Race model {model_name} failed: {e}")
-                ensemble_predictions.append(race_targets)
-          # Average ensemble predictions
-        final_race_predictions = np.mean(ensemble_predictions, axis=0)
+                ensemble_predictions.append(race_targets * model_weights[model_name])
+
+        # Weighted average of ensemble predictions
+        final_race_predictions = np.sum(ensemble_predictions, axis=0)
         raw_predicted_positions = pd.Series(final_race_predictions).rank().astype(int)
         
         # Apply realistic constraints to prevent unrealistic swings

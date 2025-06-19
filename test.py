@@ -1,15 +1,89 @@
-import fastf1
-import pandas as pd
-import numpy as np
+try:
+    import fastf1
+except ModuleNotFoundError:  # pragma: no cover - fallback for test environments
+    from types import SimpleNamespace
+
+    class _DummyCache:
+        @staticmethod
+        def enable_cache(_path):
+            pass
+
+    class _DummySession:
+        """Minimal session stub used when fastf1 is unavailable."""
+
+        def __init__(self):
+            self.laps = []
+            self.weather_data = None
+
+        def load(self):
+            pass
+
+    def _dummy_get_session(*_args, **_kwargs):
+        return _DummySession()
+
+    fastf1 = SimpleNamespace(get_session=_dummy_get_session, Cache=_DummyCache)
+
+try:
+    import pandas as pd
+except ModuleNotFoundError:  # pragma: no cover - stub for environments without pandas
+    from types import SimpleNamespace
+
+    class _DummyDF(list):
+        def __getattr__(self, _name):
+            raise ImportError('pandas is required for full functionality')
+
+    pd = SimpleNamespace(DataFrame=lambda *_args, **_kwargs: _DummyDF())
+
+try:
+    import numpy as np
+except ModuleNotFoundError:  # pragma: no cover - stub for environments without numpy
+    class _DummyNP:
+        def __getattr__(self, _name):
+            raise ImportError('numpy is required for full functionality')
+
+    np = _DummyNP()
 from datetime import datetime
 import os
 import warnings
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import cross_val_score
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-import xgboost as xgb
-from scipy import stats
+try:
+    from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.model_selection import cross_val_score
+    from sklearn.metrics import mean_absolute_error, mean_squared_error
+except ModuleNotFoundError:  # pragma: no cover - stub when scikit-learn missing
+    class _DummyModel:
+        def __init__(self, *_, **__):
+            pass
+        def fit(self, *_, **__):
+            raise ImportError('scikit-learn is required for ML features')
+        def predict(self, *_):
+            raise ImportError('scikit-learn is required for ML features')
+
+    RandomForestRegressor = GradientBoostingRegressor = _DummyModel
+    StandardScaler = lambda *_, **__: None
+    def cross_val_score(*_, **__):
+        raise ImportError('scikit-learn is required for ML features')
+    def mean_absolute_error(*_, **__):
+        raise ImportError('scikit-learn is required for ML features')
+    def mean_squared_error(*_, **__):
+        raise ImportError('scikit-learn is required for ML features')
+
+try:
+    import xgboost as xgb
+except ModuleNotFoundError:  # pragma: no cover - stub when xgboost missing
+    class _DummyXGB:
+        def __getattr__(self, _name):
+            raise ImportError('xgboost is required for ML features')
+    xgb = _DummyXGB()
+
+try:
+    from scipy import stats
+except ModuleNotFoundError:  # pragma: no cover - stub when scipy missing
+    class _DummyStats:
+        def __getattr__(self, _name):
+            raise ImportError('scipy is required for statistical features')
+
+    stats = _DummyStats()
 warnings.filterwarnings('ignore')
 
 # Create cache directory if it doesn't exist

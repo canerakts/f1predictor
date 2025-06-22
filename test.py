@@ -222,13 +222,9 @@ class F1PredictionModel:
         """Build ensemble ML models for predictions.
 
         The ensemble combines RandomForest, GradientBoosting, XGBoost and Ridge
-<<<<<<< HEAD
-        regression models to capture diverse patterns in the data.
-=======
         regression models to capture diverse patterns in the data. During
         training, feature correlations and permutation importance are computed
         to better understand which inputs drive the predictions.
->>>>>>> rz4tq4-codex/improve-machine-learning-model
         """
         logger.info("Building ensemble models...")
         
@@ -504,6 +500,28 @@ class F1PredictionModel:
                 }
         
         return simulation_stats
+
+    def analyze_tracks(self, df: pd.DataFrame, track: Optional[str] = None) -> pd.DataFrame:
+        """Analyze historical results to evaluate track characteristics"""
+        logger.info("Analyzing track statistics...")
+        track_df = df.copy()
+        if track:
+            track_df = track_df[track_df["Event"] == track]
+        summaries = []
+        for event, data in track_df.groupby("Event"):
+            summary = {"Event": event}
+            if {"GridPosition", "Position"}.issubset(data.columns):
+                summary["GridImportance"] = data["GridPosition"].corr(data["Position"])
+                summary["AvgPositionChange"] = (data["GridPosition"] - data["Position"]).abs().mean()
+            if "DNF" in data.columns:
+                summary["DNFRate"] = data["DNF"].mean()
+            if {"GridPosition", "Position"}.issubset(data.columns) and data["GridPosition"].nunique() > 1:
+                lr = LinearRegression()
+                lr.fit(data[["GridPosition"]], data["Position"])
+                summary["GridSlope"] = lr.coef_[0]
+                summary["R2"] = lr.score(data[["GridPosition"]], data["Position"])
+            summaries.append(summary)
+        return pd.DataFrame(summaries)
     
     def analyze_practice_sessions(self, practice_data: pd.DataFrame) -> Dict:
         """Analyze practice session data for insights"""
@@ -860,6 +878,12 @@ def main():
     # Build models with all available historical data
     print("Training ML models...")
     model.build_ensemble_models(featured_data)
+
+    # Track analysis for upcoming circuit
+    track_name = next_race_info["EventName"] if next_race_info else featured_data["Event"].iloc[-1]
+    print("\nTrack analysis:")
+    track_stats = model.analyze_tracks(featured_data, track_name)
+    print(track_stats.to_string(index=False))
     
     # Prepare prediction data using the most recent driver performances
     current_data = model.prepare_prediction_data(featured_data)

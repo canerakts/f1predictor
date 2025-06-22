@@ -6,6 +6,8 @@ from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.inspection import permutation_importance
+from xgboost import XGBRegressor
 import warnings
 warnings.filterwarnings('ignore')
 from datetime import datetime, timedelta
@@ -217,7 +219,13 @@ class F1PredictionModel:
         return df['Event'].map(track_overtaking['difficulty'])
     
     def build_ensemble_models(self, df: pd.DataFrame):
-        """Build ensemble ML models for predictions"""
+        """Build ensemble ML models for predictions.
+
+        The ensemble combines RandomForest, GradientBoosting, XGBoost and Ridge
+        regression models to capture diverse patterns in the data. Feature
+        importance is evaluated using permutation-based analysis for improved
+        accuracy.
+        """
         logger.info("Building ensemble models...")
         
         # Prepare features
@@ -248,10 +256,13 @@ class F1PredictionModel:
         # Scale features
         X_scaled = self.scaler.fit_transform(X)
         
-        # Build race position model
+        # Build race position model with an additional XGBoost regressor
         self.race_model = VotingRegressor([
             ('rf', RandomForestRegressor(n_estimators=100, random_state=42)),
             ('gb', GradientBoostingRegressor(n_estimators=100, random_state=42)),
+            ('xgb', XGBRegressor(n_estimators=200, learning_rate=0.05,
+                                 max_depth=4, subsample=0.8, colsample_bytree=0.8,
+                                 random_state=42, objective='reg:squarederror')),
             ('ridge', Ridge(alpha=1.0))
         ])
         
@@ -271,12 +282,18 @@ class F1PredictionModel:
         self.dnf_model = RandomForestClassifier(n_estimators=100, random_state=42)
         self.dnf_model.fit(X_scaled, y_dnf)
         
-        # Feature importance
-        if hasattr(self.race_model.estimators_[0], 'feature_importances_'):
-            self.feature_importance = dict(zip(
-                available_features,
-                self.race_model.estimators_[0].feature_importances_
-            ))
+        # Feature importance using permutation importance on the ensemble
+        importance_result = permutation_importance(
+            self.race_model,
+            X_scaled,
+            y_race,
+            n_repeats=10,
+            random_state=42,
+            n_jobs=-1,
+        )
+        self.feature_importance = dict(
+            zip(available_features, importance_result.importances_mean)
+        )
     
     def predict_qualifying(self, current_data: pd.DataFrame) -> pd.DataFrame:
         """Predict qualifying results with sector analysis"""

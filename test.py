@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class F1PredictionModel:
-    """Comprehensive F1 prediction system with ML and Monte Carlo simulations"""
+    """Comprehensive F1 prediction system with ML, Monte Carlo simulations and track analysis."""
     
     def __init__(self):
         self.scaler = StandardScaler()
@@ -31,6 +31,7 @@ class F1PredictionModel:
         self.sector_data = {}
         self.dnf_model = None
         self.feature_names = []
+        self.track_stats = None
         
     def collect_data(self, year: int, races: int = 5) -> pd.DataFrame:
         """Collect comprehensive F1 data using fastf1"""
@@ -833,6 +834,42 @@ class F1PredictionModel:
         
         logger.info(f"Prepared prediction data for {len(current_data)} drivers")
         return current_data
+
+    def analyze_track(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Analyze track-specific effects such as grid importance and DNF rate."""
+        logger.info("Analyzing track characteristics...")
+
+        results = []
+        for event in df['Event'].unique():
+            event_data = df[df['Event'] == event]
+
+            if len(event_data) < 5:
+                continue
+
+            # Importance of starting grid position using linear regression
+            grid_importance = np.nan
+            try:
+                if event_data['GridPosition'].nunique() > 1:
+                    lr = LinearRegression()
+                    lr.fit(event_data['GridPosition'].values.reshape(-1, 1),
+                           event_data['Position'].values)
+                    grid_importance = lr.coef_[0]
+            except Exception as e:
+                logger.debug(f"Grid importance calculation failed for {event}: {e}")
+
+            overtakes = (event_data['GridPosition'] - event_data['Position']).abs().mean()
+            dnf_rate = event_data['DNF'].mean()
+
+            results.append({
+                'Event': event,
+                'GridImportance': grid_importance,
+                'AverageOvertakes': overtakes,
+                'DNFRate': dnf_rate
+            })
+
+        track_stats = pd.DataFrame(results)
+        self.track_stats = track_stats
+        return track_stats
 
 
 # Example usage

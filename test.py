@@ -6,6 +6,7 @@ from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.metrics import mean_absolute_error, r2_score
+from xgboost import XGBRegressor
 import warnings
 warnings.filterwarnings('ignore')
 from datetime import datetime, timedelta
@@ -26,6 +27,7 @@ class F1PredictionModel:
         self.qualifying_model = None
         self.race_model = None
         self.feature_importance = {}
+        self.feature_analysis = {}
         self.sector_data = {}
         self.dnf_model = None
         self.feature_names = []
@@ -217,7 +219,13 @@ class F1PredictionModel:
         return df['Event'].map(track_overtaking['difficulty'])
     
     def build_ensemble_models(self, df: pd.DataFrame):
-        """Build ensemble ML models for predictions"""
+        """Build ensemble ML models for predictions.
+
+        The ensemble combines RandomForest, GradientBoosting, XGBoost and Ridge
+        regression models to capture diverse patterns in the data. During
+        training, feature correlations and permutation importance are computed
+        to better understand which inputs drive the predictions.
+        """
         logger.info("Building ensemble models...")
         
         # Prepare features
@@ -248,10 +256,13 @@ class F1PredictionModel:
         # Scale features
         X_scaled = self.scaler.fit_transform(X)
         
-        # Build race position model
+        # Build race position model with an additional XGBoost regressor
         self.race_model = VotingRegressor([
             ('rf', RandomForestRegressor(n_estimators=100, random_state=42)),
             ('gb', GradientBoostingRegressor(n_estimators=100, random_state=42)),
+            ('xgb', XGBRegressor(n_estimators=200, learning_rate=0.05,
+                                 max_depth=4, subsample=0.8, colsample_bytree=0.8,
+                                 random_state=42, objective='reg:squarederror')),
             ('ridge', Ridge(alpha=1.0))
         ])
         
@@ -271,12 +282,19 @@ class F1PredictionModel:
         self.dnf_model = RandomForestClassifier(n_estimators=100, random_state=42)
         self.dnf_model.fit(X_scaled, y_dnf)
         
-        # Feature importance
-        if hasattr(self.race_model.estimators_[0], 'feature_importances_'):
-            self.feature_importance = dict(zip(
-                available_features,
-                self.race_model.estimators_[0].feature_importances_
-            ))
+        # Analyze feature correlations
+        correlations = X.corrwith(y_race).abs().sort_values(ascending=False)
+        self.feature_analysis['correlation'] = correlations.to_dict()
+        logger.info("Top correlated features: %s", correlations.head(5).to_dict())
+
+        # Feature importance using permutation importance
+        from sklearn.inspection import permutation_importance
+        perm = permutation_importance(self.race_model, X_scaled, y_race,
+                                      n_repeats=10, random_state=42)
+        self.feature_importance = dict(zip(
+            available_features,
+            perm.importances_mean
+        ))
     
     def predict_qualifying(self, current_data: pd.DataFrame) -> pd.DataFrame:
         """Predict qualifying results with sector analysis"""
@@ -748,10 +766,18 @@ class F1PredictionModel:
         
         # Dark horses
         if len(race_sorted) > 10:
-            dark_horses = [d for d, s in race_sorted[5:10] 
+            dark_horses = [d for d, s in race_sorted[5:10]
                           if s['points_probability'] > 0.3]
             if dark_horses:
                 report.append(f"• Dark Horses for Points: {', '.join(dark_horses[:3])}")
+
+        # Feature analysis insights
+        if self.feature_analysis.get('correlation'):
+            top_corr = max(self.feature_analysis['correlation'], key=self.feature_analysis['correlation'].get)
+            report.append(f"• Feature most correlated with results: {top_corr}")
+        if self.feature_importance:
+            top_imp = max(self.feature_importance, key=self.feature_importance.get)
+            report.append(f"• Model emphasizes: {top_imp}")
         
         # Data quality note
         missing_features = sum(1 for col in self.feature_names 

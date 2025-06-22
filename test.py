@@ -618,6 +618,71 @@ class F1PredictionModel:
                 degradations.append(model.coef_[0])
         
         return np.mean(degradations) if degradations else 0
+
+    def analyze_track(self, df: pd.DataFrame, track_name: str) -> Dict[str, float]:
+        """Analyze a specific track for grid impact, overtaking and DNF rate.
+
+        The analysis fits a simple linear regression model of finish position on
+        grid position for the chosen track to quantify how strongly starting
+        order affects the result. It also calculates average position changes and
+        the rate of retirements (DNFs).
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Historical race data with engineered features.
+        track_name : str
+            Name of the event/track to analyze.
+
+        Returns
+        -------
+        Dict[str, float]
+            Dictionary containing:
+            - ``grid_position_importance``: regression slope of finish position
+              on grid position.
+            - ``grid_position_r2``: R^2 score of that regression.
+            - ``avg_overtakes``: mean absolute difference between grid and final
+              position.
+            - ``dnf_rate``: proportion of drivers that did not finish.
+        """
+
+        track_data = df[df['Event'] == track_name]
+        if track_data.empty:
+            logger.warning("No data available for %s", track_name)
+            return {}
+
+        metrics = {}
+
+        # Grid position importance via linear regression
+        if {'GridPosition', 'Position'}.issubset(track_data.columns):
+            valid = track_data.dropna(subset=['GridPosition', 'Position'])
+            if not valid.empty:
+                X = valid[['GridPosition']]
+                y = valid['Position']
+                lr = LinearRegression()
+                lr.fit(X, y)
+                metrics['grid_position_importance'] = float(lr.coef_[0])
+                metrics['grid_position_r2'] = float(lr.score(X, y))
+            else:
+                metrics['grid_position_importance'] = np.nan
+                metrics['grid_position_r2'] = np.nan
+        else:
+            metrics['grid_position_importance'] = np.nan
+            metrics['grid_position_r2'] = np.nan
+
+        # Overtaking metric
+        if 'GridPositionDelta' in track_data.columns:
+            metrics['avg_overtakes'] = float(track_data['GridPositionDelta'].abs().mean())
+        else:
+            metrics['avg_overtakes'] = np.nan
+
+        # DNF rate
+        if 'DNF' in track_data.columns:
+            metrics['dnf_rate'] = float(track_data['DNF'].mean())
+        else:
+            metrics['dnf_rate'] = np.nan
+
+        return metrics
     
     def visualize_predictions(self, predictions: Dict, simulation_stats: Dict):
         """Create visualizations for predictions"""

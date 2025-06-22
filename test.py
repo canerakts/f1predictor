@@ -365,7 +365,7 @@ class F1PredictionModel:
                 pole_prob = q3_prob * 0.1  # Lower pole chance without sector data
             
             # Ensure probabilities are reasonable
-            pole_prob = min(pole_prob, 0.3)  # Cap at 30%
+            pole_prob = min(pole_prob, 1)  # Cap at 30%
             q3_prob = min(q3_prob, 0.99)   # Cap at 99%
             
             # Position prediction based on theoretical best
@@ -838,7 +838,7 @@ def main():
     
     # Collect historical data (use all available races from current year for better training)
     print("Collecting F1 data...")
-    historical_data = model.collect_data(year=2025, races=8)
+    historical_data = model.collect_data(year=2025, races=9)
     
     # Get information about the next race
     next_race_info = model.get_next_race()

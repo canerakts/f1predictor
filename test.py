@@ -2,6 +2,8 @@ import fastf1
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, VotingRegressor
+from sklearn.experimental import enable_hist_gradient_boosting  # noqa: F401
+from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import cross_val_score, KFold
@@ -250,8 +252,9 @@ class F1PredictionModel:
         
         # Build race position model
         self.race_model = VotingRegressor([
-            ('rf', RandomForestRegressor(n_estimators=100, random_state=42)),
-            ('gb', GradientBoostingRegressor(n_estimators=100, random_state=42)),
+            ('rf', RandomForestRegressor(n_estimators=150, random_state=42)),
+            ('gb', GradientBoostingRegressor(n_estimators=200, random_state=42)),
+            ('hgb', HistGradientBoostingRegressor(max_depth=7, random_state=42)),
             ('ridge', Ridge(alpha=1.0))
         ])
         

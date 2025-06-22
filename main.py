@@ -35,6 +35,11 @@ class F1RacePredictor:
     def __init__(self, year=2025):
         self.year = year
 
+    def _logistic_calibration(self, x):
+        """Simple logistic calibration for probabilities."""
+        x = np.clip(x, 0, 1)
+        return 1 / (1 + np.exp(-5 * (x - 0.5)))
+
     # ------------------------------------------------------------------
     # Data collection
     # ------------------------------------------------------------------
@@ -43,14 +48,46 @@ class F1RacePredictor:
             session = fastf1.get_session(year, gp_name, session_type)
             session.load()
             laps = session.laps
+            if isinstance(laps, list):  # fallback for dummy session
+                return pd.DataFrame(
+                    columns=[
+                        'Driver',
+                        'Team',
+                        'LapTime',
+                        'Sector1Time',
+                        'Sector2Time',
+                        'Sector3Time',
+                    ]
+                )
             laps = laps[laps['LapTime'].notna()]
             laps = laps[laps['PitOutTime'].isna()]
-            return laps[['Driver', 'LapTime']]
+            return laps[
+                [
+                    'Driver',
+                    'Team',
+                    'LapTime',
+                    'Sector1Time',
+                    'Sector2Time',
+                    'Sector3Time',
+                    'LapNumber',
+                ]
+            ]
         except Exception as exc:  # pragma: no cover - network issues
             print(f"Error loading {session_type}: {exc}")
-            return pd.DataFrame(columns=['Driver', 'LapTime'])
+            return pd.DataFrame(
+                columns=[
+                    'Driver',
+                    'Team',
+                    'LapTime',
+                    'Sector1Time',
+                    'Sector2Time',
+                    'Sector3Time',
+                    'LapNumber',
+                ]
+            )
 
     def extract_weekend_features(self, gp_name):
+        """Separate qualifying-style and race-style laps from practice data."""
         all_laps = []
         year = self.year if self.year <= datetime.now().year else datetime.now().year
         for session in ['FP1', 'FP2', 'FP3']:
@@ -58,24 +95,143 @@ class F1RacePredictor:
             if not laps.empty:
                 all_laps.append(laps)
         if not all_laps:
-            return pd.DataFrame(), pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
         laps = pd.concat(all_laps)
-        quali_runs = laps.groupby('Driver')['LapTime'].min().reset_index()
-        quali_runs.rename(columns={'LapTime': 'BestLap'}, inplace=True)
-        race_runs = laps.groupby('Driver')['LapTime'].mean().reset_index()
-        race_runs.rename(columns={'LapTime': 'AvgLap'}, inplace=True)
-        return quali_runs, race_runs
+        team_map = laps[['Driver', 'Team']].drop_duplicates()
+        # Determine a per-driver cutoff to split fast laps from long runs
+        qcut = laps.groupby('Driver')['LapTime'].transform(lambda x: x.quantile(0.25))
+        laps['is_quali'] = laps['LapTime'] <= qcut
+
+        quali_runs = (
+            laps[laps['is_quali']]
+            .groupby('Driver')['LapTime']
+            .min()
+            .reset_index(name='BestLap')
+            .merge(team_map, on='Driver', how='left')
+        )
+
+        race_laps = laps[~laps['is_quali']]
+        if race_laps.empty:
+            race_laps = laps
+        race_runs = (
+            race_laps.groupby('Driver')['LapTime']
+            .mean()
+            .reset_index(name='AvgLap')
+            .merge(team_map, on='Driver', how='left')
+        )
+
+        # Tyre degradation: slope of lap time increase over long runs
+        rl = race_laps[['Driver', 'Team', 'LapTime', 'LapNumber']].copy()
+        rl['LapTimeSec'] = rl['LapTime'].dt.total_seconds()
+        def _deg(df):
+            df = df.sort_values('LapNumber')
+            if len(df) < 2:
+                return 0.0
+            x = df['LapNumber'] - df['LapNumber'].min()
+            y = df['LapTimeSec']
+            try:
+                s, _ = np.polyfit(x, y, 1)
+            except Exception:
+                s = 0.0
+            return s
+
+        driver_deg = rl.groupby('Driver').apply(_deg).reset_index(name='TyreDeg')
+        team_deg = rl.groupby('Team').apply(_deg).reset_index(name='TeamTyreDeg')
+
+        stats = (
+            laps.groupby('Driver')['LapTime']
+            .agg(['median', 'std', 'count'])
+            .reset_index()
+            .rename(columns={'median': 'MedianLap', 'std': 'LapStd', 'count': 'NumLaps'})
+            .merge(team_map, on='Driver', how='left')
+        )
+
+        team_quali = (
+            laps[laps['is_quali']]
+            .groupby('Team')['LapTime']
+            .min()
+            .reset_index(name='TeamBestLap')
+        )
+
+        team_theoretical = (
+            laps.groupby('Team')[['Sector1Time', 'Sector2Time', 'Sector3Time']]
+            .min()
+            .sum(axis=1)
+            .reset_index(name='TeamTheoreticalBest')
+        )
+
+        team_stats = (
+            laps.groupby('Team')['LapTime']
+            .agg(['median', 'std', 'count'])
+            .reset_index()
+            .rename(
+                columns={
+                    'median': 'TeamMedianLap',
+                    'std': 'TeamLapStd',
+                    'count': 'TeamNumLaps',
+                }
+            )
+        )
+
+        teams = (
+            team_quali.merge(team_theoretical, on='Team', how='outer')
+            .merge(team_stats, on='Team', how='outer')
+            .merge(team_deg, on='Team', how='left')
+        )
+
+        return quali_runs, race_runs, stats.merge(driver_deg, on='Driver', how='left'), teams
 
     # ------------------------------------------------------------------
     # Feature preparation
     # ------------------------------------------------------------------
-    def prepare_features_for_ml(self, quali_runs, race_runs):
+    def prepare_features_for_ml(self, quali_runs, race_runs, stats, team_data):
+        """Combine all aggregates into a single feature table."""
         if quali_runs.empty:
             return pd.DataFrame()
-        features = quali_runs.merge(race_runs, on='Driver', how='left')
+
+        features = quali_runs.merge(race_runs, on=['Driver', 'Team'], how='left')
+        features = features.merge(stats, on=['Driver', 'Team'], how='left')
+        features = features.merge(team_data, on='Team', how='left')
+
+        # Fallbacks for missing data
         features['AvgLap'].fillna(features['BestLap'], inplace=True)
+        features['MedianLap'].fillna(features['BestLap'], inplace=True)
+        if 'LapStd' in features:
+            if features['LapStd'].isna().all():
+                features['LapStd'].fillna(0, inplace=True)
+            else:
+                features['LapStd'].fillna(features['LapStd'].median(), inplace=True)
+        else:
+            features['LapStd'] = 0
+        features['NumLaps'].fillna(0, inplace=True)
+
+        team_cols = [
+            'TeamBestLap',
+            'TeamTheoreticalBest',
+            'TeamMedianLap',
+            'TeamLapStd',
+            'TeamNumLaps',
+            'TeamTyreDeg',
+        ]
+        for c in team_cols:
+            if c in features:
+                if features[c].isna().all():
+                    features[c].fillna(features[c].median() if features[c].dtype != object else 0, inplace=True)
+                else:
+                    features[c].fillna(features[c].median(), inplace=True)
+            else:
+                features[c] = 0
+
+        # Tyre degradation fallbacks
+        if 'TyreDeg' not in features:
+            features['TyreDeg'] = 0
+        else:
+            features['TyreDeg'].fillna(features['TyreDeg'].median(), inplace=True)
+        
         fastest = features['BestLap'].min()
         features['gap_to_fastest'] = features['BestLap'] - fastest
+        features['team_gap'] = features['TeamTheoreticalBest'] - features['BestLap']
         return features
 
     # ------------------------------------------------------------------
@@ -84,9 +240,23 @@ class F1RacePredictor:
     def predict_qualifying(self, features):
         if features.empty:
             return pd.DataFrame()
-        features = features.sort_values('BestLap')
+        # Factor in team pace and consistency
+        features['qual_score'] = (
+            features['BestLap']
+            + 0.05 * features['LapStd']
+            + 0.02 * features['TeamLapStd']
+            + 0.01 * features['team_gap']
+        )
+        features = features.sort_values('qual_score')
         features['Predicted_Position'] = range(1, len(features) + 1)
-        features['Confidence'] = 100 - features['gap_to_fastest'].rank(pct=True) * 50
+
+        raw_prob = 1 - features['qual_score'].rank(pct=True)
+        lap_factor = features['NumLaps'] / features['NumLaps'].max()
+        lap_factor = lap_factor.clip(lower=0.5)
+        team_factor = 1 - (features['TeamLapStd'] / features['TeamLapStd'].max())
+        calibrated = self._logistic_calibration(raw_prob)
+        features['Confidence'] = (calibrated * 100 * lap_factor * team_factor).round(2)
+
         return features[['Driver', 'Predicted_Position', 'Confidence']]
 
     # ------------------------------------------------------------------
@@ -97,25 +267,80 @@ class F1RacePredictor:
             return pd.DataFrame()
         grid = dict(zip(quali_predictions['Driver'], quali_predictions['Predicted_Position']))
         features['Grid'] = features['Driver'].map(grid).fillna(20)
+
         features['pace_rank'] = features['AvgLap'].rank()
-        score = features['Grid'] * 0.4 + features['pace_rank'] * 0.6
+        features['consistency_rank'] = features['LapStd'].rank()
+        features['laps_rank'] = features['NumLaps'].rank(ascending=False)
+        features['team_pace_rank'] = features['TeamTheoreticalBest'].rank()
+        features['team_consistency_rank'] = features['TeamLapStd'].rank()
+        features['degradation_rank'] = features['TyreDeg'].rank()
+        features['team_degradation_rank'] = features['TeamTyreDeg'].rank()
+
+        score = (
+            features['Grid'] * 0.3
+            + features['pace_rank'] * 0.25
+            + features['consistency_rank'] * 0.15
+            + features['team_pace_rank'] * 0.2
+            + features['team_consistency_rank'] * 0.05
+            + features['laps_rank'] * 0.05
+            + features['degradation_rank'] * 0.03
+            + features['team_degradation_rank'] * 0.02
+        )
+
         features['Predicted_Finish'] = score.rank().astype(int)
-        return features[['Driver', 'Predicted_Finish', 'Grid']].sort_values('Predicted_Finish')
+
+        return features[
+            [
+                'Driver',
+                'Predicted_Finish',
+                'Grid',
+                'LapStd',
+                'NumLaps',
+                'TeamLapStd',
+                'TeamTheoreticalBest',
+                'TyreDeg',
+                'TeamTyreDeg',
+            ]
+        ].sort_values('Predicted_Finish')
 
     # ------------------------------------------------------------------
     # Monte Carlo simulation
     # ------------------------------------------------------------------
     def simulate_race(self, race_predictions, num_sim=1000):
+        """Monte Carlo simulation with uncertainty scaled by data quality."""
         if race_predictions.empty:
             return pd.DataFrame()
-        results = []
+
         drivers = race_predictions['Driver'].tolist()
-        base_pos = race_predictions['Predicted_Finish'].values.astype(float)
+        base_pos = race_predictions['Predicted_Finish'].astype(float).values
+
+        lap_std = race_predictions.get('LapStd', pd.Series([pd.Timedelta(0)] * len(base_pos)))
+        num_laps = race_predictions.get('NumLaps', pd.Series([0] * len(base_pos)))
+        team_std = race_predictions.get('TeamLapStd', pd.Series([pd.Timedelta(0)] * len(base_pos)))
+        tyre_deg = race_predictions.get('TyreDeg', pd.Series([0.0] * len(base_pos)))
+        team_deg = race_predictions.get('TeamTyreDeg', pd.Series([0.0] * len(base_pos)))
+
+        # Convert timedeltas to seconds for scaling
+        lap_std_sec = lap_std.dt.total_seconds() if hasattr(lap_std, 'dt') else lap_std
+        team_std_sec = team_std.dt.total_seconds() if hasattr(team_std, 'dt') else team_std
+        max_std = lap_std_sec.max() if lap_std_sec.max() != 0 else 1
+        max_team_std = team_std_sec.max() if team_std_sec.max() != 0 else 1
+        max_laps = num_laps.max() if num_laps.max() != 0 else 1
+        max_deg = np.abs(tyre_deg).max() if np.abs(tyre_deg).max() != 0 else 1
+        max_team_deg = np.abs(team_deg).max() if np.abs(team_deg).max() != 0 else 1
+
+        std_factor = lap_std_sec / max_std
+        laps_factor = 1 - (num_laps / max_laps)
+        team_factor = team_std_sec / max_team_std
+        deg_factor = (np.abs(tyre_deg) / max_deg + np.abs(team_deg) / max_team_deg) / 2
+        noise_scale = 1.0 + std_factor + laps_factor + team_factor + deg_factor
+
+        results = []
         for _ in range(num_sim):
-            noise = np.random.normal(0, 1.5, size=len(base_pos))
+            noise = np.random.normal(0, noise_scale, size=len(base_pos))
             pos = np.clip(base_pos + noise, 1, 20)
-            order = pd.Series(pos).rank().astype(int)
-            results.append(order)
+            results.append(pd.Series(pos).rank().astype(int).values)
+
         sim_df = pd.DataFrame(results, columns=drivers)
         summary = []
         for d in drivers:
@@ -133,8 +358,8 @@ class F1RacePredictor:
     # End-to-end pipeline
     # ------------------------------------------------------------------
     def run_prediction(self, gp_name):
-        quali_runs, race_runs = self.extract_weekend_features(gp_name)
-        features = self.prepare_features_for_ml(quali_runs, race_runs)
+        quali_runs, race_runs, stats, teams = self.extract_weekend_features(gp_name)
+        features = self.prepare_features_for_ml(quali_runs, race_runs, stats, teams)
         quali_pred = self.predict_qualifying(features)
         race_pred = self.predict_race(features, quali_pred)
         monte_carlo = self.simulate_race(race_pred)

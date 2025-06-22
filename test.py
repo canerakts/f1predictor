@@ -6,6 +6,7 @@ from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.metrics import mean_absolute_error, r2_score
+from xgboost import XGBRegressor
 import warnings
 warnings.filterwarnings('ignore')
 from datetime import datetime, timedelta
@@ -217,7 +218,11 @@ class F1PredictionModel:
         return df['Event'].map(track_overtaking['difficulty'])
     
     def build_ensemble_models(self, df: pd.DataFrame):
-        """Build ensemble ML models for predictions"""
+        """Build ensemble ML models for predictions.
+
+        The ensemble combines RandomForest, GradientBoosting, XGBoost and Ridge
+        regression models to capture diverse patterns in the data.
+        """
         logger.info("Building ensemble models...")
         
         # Prepare features
@@ -248,10 +253,13 @@ class F1PredictionModel:
         # Scale features
         X_scaled = self.scaler.fit_transform(X)
         
-        # Build race position model
+        # Build race position model with an additional XGBoost regressor
         self.race_model = VotingRegressor([
             ('rf', RandomForestRegressor(n_estimators=100, random_state=42)),
             ('gb', GradientBoostingRegressor(n_estimators=100, random_state=42)),
+            ('xgb', XGBRegressor(n_estimators=200, learning_rate=0.05,
+                                 max_depth=4, subsample=0.8, colsample_bytree=0.8,
+                                 random_state=42, objective='reg:squarederror')),
             ('ridge', Ridge(alpha=1.0))
         ])
         

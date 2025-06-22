@@ -27,6 +27,7 @@ class F1PredictionModel:
         self.qualifying_model = None
         self.race_model = None
         self.feature_importance = {}
+        self.feature_analysis = {}
         self.sector_data = {}
         self.dnf_model = None
         self.feature_names = []
@@ -221,7 +222,13 @@ class F1PredictionModel:
         """Build ensemble ML models for predictions.
 
         The ensemble combines RandomForest, GradientBoosting, XGBoost and Ridge
+<<<<<<< HEAD
         regression models to capture diverse patterns in the data.
+=======
+        regression models to capture diverse patterns in the data. During
+        training, feature correlations and permutation importance are computed
+        to better understand which inputs drive the predictions.
+>>>>>>> rz4tq4-codex/improve-machine-learning-model
         """
         logger.info("Building ensemble models...")
         
@@ -279,12 +286,19 @@ class F1PredictionModel:
         self.dnf_model = RandomForestClassifier(n_estimators=100, random_state=42)
         self.dnf_model.fit(X_scaled, y_dnf)
         
-        # Feature importance
-        if hasattr(self.race_model.estimators_[0], 'feature_importances_'):
-            self.feature_importance = dict(zip(
-                available_features,
-                self.race_model.estimators_[0].feature_importances_
-            ))
+        # Analyze feature correlations
+        correlations = X.corrwith(y_race).abs().sort_values(ascending=False)
+        self.feature_analysis['correlation'] = correlations.to_dict()
+        logger.info("Top correlated features: %s", correlations.head(5).to_dict())
+
+        # Feature importance using permutation importance
+        from sklearn.inspection import permutation_importance
+        perm = permutation_importance(self.race_model, X_scaled, y_race,
+                                      n_repeats=10, random_state=42)
+        self.feature_importance = dict(zip(
+            available_features,
+            perm.importances_mean
+        ))
     
     def predict_qualifying(self, current_data: pd.DataFrame) -> pd.DataFrame:
         """Predict qualifying results with sector analysis"""
@@ -355,7 +369,7 @@ class F1PredictionModel:
                 pole_prob = q3_prob * 0.1  # Lower pole chance without sector data
             
             # Ensure probabilities are reasonable
-            pole_prob = min(pole_prob, 0.3)  # Cap at 30%
+            pole_prob = min(pole_prob, 1)  # Cap at 30%
             q3_prob = min(q3_prob, 0.99)   # Cap at 99%
             
             # Position prediction based on theoretical best
@@ -756,10 +770,18 @@ class F1PredictionModel:
         
         # Dark horses
         if len(race_sorted) > 10:
-            dark_horses = [d for d, s in race_sorted[5:10] 
+            dark_horses = [d for d, s in race_sorted[5:10]
                           if s['points_probability'] > 0.3]
             if dark_horses:
                 report.append(f"• Dark Horses for Points: {', '.join(dark_horses[:3])}")
+
+        # Feature analysis insights
+        if self.feature_analysis.get('correlation'):
+            top_corr = max(self.feature_analysis['correlation'], key=self.feature_analysis['correlation'].get)
+            report.append(f"• Feature most correlated with results: {top_corr}")
+        if self.feature_importance:
+            top_imp = max(self.feature_importance, key=self.feature_importance.get)
+            report.append(f"• Model emphasizes: {top_imp}")
         
         # Data quality note
         missing_features = sum(1 for col in self.feature_names 
@@ -820,7 +842,7 @@ def main():
     
     # Collect historical data (use all available races from current year for better training)
     print("Collecting F1 data...")
-    historical_data = model.collect_data(year=2025, races=8)
+    historical_data = model.collect_data(year=2025, races=9)
     
     # Get information about the next race
     next_race_info = model.get_next_race()

@@ -3,6 +3,11 @@ import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, VotingRegressor
 from sklearn.linear_model import LinearRegression, Ridge
+try:
+    from xgboost import XGBRegressor
+except Exception as e:  # pragma: no cover - optional dependency
+    XGBRegressor = None
+    logging.getLogger(__name__).warning("XGBoost not available: %s", e)
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.metrics import mean_absolute_error, r2_score
@@ -249,11 +254,32 @@ class F1PredictionModel:
         X_scaled = self.scaler.fit_transform(X)
         
         # Build race position model
-        self.race_model = VotingRegressor([
+        estimators = [
             ('rf', RandomForestRegressor(n_estimators=100, random_state=42)),
             ('gb', GradientBoostingRegressor(n_estimators=100, random_state=42)),
             ('ridge', Ridge(alpha=1.0))
-        ])
+        ]
+
+        # Optionally include XGBoost if available
+        if XGBRegressor is not None:
+            estimators.append(
+                (
+                    'xgb',
+                    XGBRegressor(
+                        n_estimators=200,
+                        max_depth=4,
+                        learning_rate=0.05,
+                        subsample=0.8,
+                        colsample_bytree=0.8,
+                        random_state=42,
+                        verbosity=0,
+                    ),
+                )
+            )
+        else:
+            logger.warning("XGBoost not installed, skipping XGBRegressor")
+
+        self.race_model = VotingRegressor(estimators)
         
         # Cross-validation
         cv_scores = cross_val_score(self.race_model, X_scaled, y_race, 

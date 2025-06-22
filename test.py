@@ -6,6 +6,7 @@ from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.metrics import mean_absolute_error, r2_score
+from xgboost import XGBRegressor
 import warnings
 warnings.filterwarnings('ignore')
 from datetime import datetime, timedelta
@@ -213,11 +214,38 @@ class F1PredictionModel:
         # Simple heuristic based on position changes
         track_overtaking = df.groupby('Event')['GridPositionDelta'].agg(['mean', 'std'])
         track_overtaking['difficulty'] = 1 / (1 + track_overtaking['std'])
-        
+
         return df['Event'].map(track_overtaking['difficulty'])
+
+    def _select_features_by_correlation(self, df: pd.DataFrame, features: List[str],
+                                        target: str, top_n: int = 10,
+                                        threshold: float = 0.05) -> List[str]:
+        """Select top correlated features with the target variable."""
+        df_copy = df[features + [target]].dropna()
+        if df_copy.empty:
+            logger.warning("No data available for correlation-based feature selection")
+            return features
+
+        corrs = df_copy.corr().get(target)
+        if corrs is None:
+            return features
+
+        corrs = corrs.drop(target, errors='ignore').abs().sort_values(ascending=False)
+        selected = corrs[corrs > threshold].index.tolist()[:top_n]
+        if not selected:
+            logger.info("Correlation threshold left no features; using all")
+            return features
+
+        logger.info(f"Selected features by correlation: {selected}")
+        return selected
     
     def build_ensemble_models(self, df: pd.DataFrame):
-        """Build ensemble ML models for predictions"""
+        """Build ensemble ML models for race outcome predictions.
+
+        The method performs correlation-based feature selection before fitting
+        an ensemble consisting of RandomForest, GradientBoosting, XGBoost and
+        Ridge regression models to capture diverse patterns in the data.
+        """
         logger.info("Building ensemble models...")
         
         # Prepare features
@@ -233,7 +261,11 @@ class F1PredictionModel:
         
         # Filter available features
         available_features = [col for col in feature_cols if col in df.columns]
-        self.feature_names = available_features  # Store for later use
+
+        # Use correlation to select the most informative features
+        selected_features = self._select_features_by_correlation(
+            df, available_features, target='Position', top_n=12)
+        self.feature_names = selected_features  # Store for later use
         
         # Prepare data - only use rows with valid positions
         valid_data = df[df['Position'].notna() & (df['Position'] > 0) & (df['Position'] <= 20)].copy()
@@ -241,17 +273,20 @@ class F1PredictionModel:
         if len(valid_data) < 20:
             logger.warning(f"Limited valid data for training: {len(valid_data)} samples")
         
-        X = valid_data[available_features].fillna(valid_data[available_features].mean())
+        X = valid_data[selected_features].fillna(valid_data[selected_features].mean())
         y_race = valid_data['Position'].astype(int)
         y_dnf = valid_data['DNF'].astype(int)
         
         # Scale features
         X_scaled = self.scaler.fit_transform(X)
         
-        # Build race position model
+        # Build race position model with an additional XGBoost regressor
         self.race_model = VotingRegressor([
             ('rf', RandomForestRegressor(n_estimators=100, random_state=42)),
             ('gb', GradientBoostingRegressor(n_estimators=100, random_state=42)),
+            ('xgb', XGBRegressor(n_estimators=200, learning_rate=0.05,
+                                 max_depth=4, subsample=0.8, colsample_bytree=0.8,
+                                 random_state=42, objective='reg:squarederror')),
             ('ridge', Ridge(alpha=1.0))
         ])
         
@@ -272,11 +307,18 @@ class F1PredictionModel:
         self.dnf_model.fit(X_scaled, y_dnf)
         
         # Feature importance
-        if hasattr(self.race_model.estimators_[0], 'feature_importances_'):
+        try:
+            from sklearn.inspection import permutation_importance
+            importance = permutation_importance(
+                self.race_model, X_scaled, y_race,
+                n_repeats=5, random_state=42
+            )
             self.feature_importance = dict(zip(
-                available_features,
-                self.race_model.estimators_[0].feature_importances_
+                self.feature_names,
+                importance.importances_mean
             ))
+        except Exception as e:
+            logger.debug(f"Permutation importance failed: {e}")
     
     def predict_qualifying(self, current_data: pd.DataFrame) -> pd.DataFrame:
         """Predict qualifying results with sector analysis"""

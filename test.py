@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, VotingRegressor
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import cross_val_score, KFold
+from sklearn.model_selection import cross_val_score, KFold, GroupKFold
 from sklearn.metrics import mean_absolute_error, r2_score
 import warnings
 warnings.filterwarnings('ignore')
@@ -255,11 +255,17 @@ class F1PredictionModel:
             ('ridge', Ridge(alpha=1.0))
         ])
         
-        # Cross-validation
-        cv_scores = cross_val_score(self.race_model, X_scaled, y_race, 
-                                   cv=KFold(n_splits=min(5, len(valid_data)//10), 
-                                           shuffle=True, random_state=42),
-                                   scoring='neg_mean_absolute_error')
+        # Cross-validation using GroupKFold to avoid data leakage across events
+        n_splits = min(5, valid_data['Event'].nunique()) or 2
+        cv = GroupKFold(n_splits=n_splits)
+        cv_scores = cross_val_score(
+            self.race_model,
+            X_scaled,
+            y_race,
+            groups=valid_data['Event'],
+            cv=cv,
+            scoring='neg_mean_absolute_error'
+        )
         
         logger.info(f"Cross-validation MAE: {-cv_scores.mean():.2f} (+/- {cv_scores.std() * 2:.2f})")
         
